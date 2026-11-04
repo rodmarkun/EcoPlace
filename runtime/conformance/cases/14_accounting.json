@@ -1,0 +1,313 @@
+[
+ {
+  "name": "acct_stmt_and_literal",
+  "source": "def f() -> int:\n    return 1\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "I": 1
+   },
+   "fuel_used": 2,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_binary",
+  "source": "def f() -> int:\n    return 1 + 2\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "I": 3
+   },
+   "fuel_used": 4,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_assign_and_name",
+  "source": "def f() -> int:\n    x = 5\n    return x\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "I": 5
+   },
+   "fuel_used": 4,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_builtin_call",
+  "source": "def f() -> float:\n    return sqrt(4.0)\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "F": 2.0
+   },
+   "fuel_used": 3,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_user_call_overhead_10",
+  "source": "def g() -> int:\n    return 1\ndef f() -> int:\n    return g()\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "I": 1
+   },
+   "fuel_used": 13,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_range_loop",
+  "source": "def f() -> int:\n    acc = 0\n    for i in range(3):\n        acc += 1\n    return acc\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "I": 3
+   },
+   "fuel_used": 17,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_list_loop",
+  "source": "def f(xs: list[int]) -> int:\n    acc = 0\n    for x in xs:\n        acc += x\n    return acc\n",
+  "func": "f",
+  "args": [
+   {
+    "L": [
+     {
+      "I": 1
+     },
+     {
+      "I": 2
+     }
+    ]
+   }
+  ],
+  "expect": {
+   "value": {
+    "I": 3
+   },
+   "fuel_used": 13,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_list_display_mem_32_plus_16n",
+  "source": "def f() -> int:\n    xs = [1, 2, 3]\n    return len(xs)\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "I": 3
+   },
+   "fuel_used": 11,
+   "mem_used": 80
+  }
+ },
+ {
+  "name": "acct_append_mem_16",
+  "source": "def f() -> int:\n    xs: list[int] = []\n    xs.append(7)\n    return len(xs)\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "I": 1
+   },
+   "fuel_used": 7,
+   "mem_used": 48
+  }
+ },
+ {
+  "name": "acct_move_pod_mem_32",
+  "source": "def f() -> Move:\n    return move_pod(1, 2)\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "R": {
+     "ty": "Move",
+     "fields": [
+      {
+       "I": 0
+      },
+      {
+       "I": 1
+      },
+      {
+       "I": 2
+      }
+     ]
+    }
+   },
+   "fuel_used": 4,
+   "mem_used": 32
+  }
+ },
+ {
+  "name": "acct_wake_mem_32",
+  "source": "def f() -> Move:\n    return wake(3)\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "R": {
+     "ty": "Move",
+     "fields": [
+      {
+       "I": 1
+      },
+      {
+       "I": -1
+      },
+      {
+       "I": 3
+      }
+     ]
+    }
+   },
+   "fuel_used": 3,
+   "mem_used": 32
+  }
+ },
+ {
+  "name": "acct_string_literal_zero_eval_charge",
+  "source": "def f() -> str:\n    s = \"abc\"\n    return s\n",
+  "func": "f",
+  "expect": {
+   "value": {
+    "S": "abc"
+   },
+   "fuel_used": 4,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_fuel_boundary_exact",
+  "source": "def f() -> int:\n    return 1\n",
+  "func": "f",
+  "fuel": 2,
+  "expect": {
+   "value": {
+    "I": 1
+   },
+   "fuel_used": 2,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_fuel_boundary_exhausted",
+  "source": "def f() -> int:\n    return 1\n",
+  "func": "f",
+  "fuel": 1,
+  "expect": {
+   "error": "fuel",
+   "fuel_used": 1,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_oom_boundary_exact",
+  "source": "def f() -> int:\n    xs = [1]\n    return len(xs)\n",
+  "func": "f",
+  "memory_bytes": 48,
+  "expect": {
+   "value": {
+    "I": 1
+   },
+   "fuel_used": 7,
+   "mem_used": 48
+  }
+ },
+ {
+  "name": "acct_oom_boundary_exhausted",
+  "source": "def f() -> int:\n    xs = [1]\n    return len(xs)\n",
+  "func": "f",
+  "memory_bytes": 47,
+  "expect": {
+   "error": "oom",
+   "fuel_used": 3,
+   "mem_used": 47
+  }
+ },
+ {
+  "name": "acct_trap_error_path_costed",
+  "source": "def f() -> int:\n    return 7 // 0\n",
+  "func": "f",
+  "expect": {
+   "error": "trap",
+   "message_contains": "division by zero",
+   "fuel_used": 4,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_load_fuel_exact",
+  "source": "def f() -> int:\n    return 1\n",
+  "func": "f",
+  "load_fuel": 31,
+  "expect": {
+   "value": {
+    "I": 1
+   },
+   "fuel_used": 2,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_load_fuel_exhausted",
+  "source": "def f() -> int:\n    return 1\n",
+  "func": "f",
+  "load_fuel": 30,
+  "expect": {
+   "error": "fuel",
+   "fuel_used": 0,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_load_mem_exact_string_const",
+  "source": "S: str = \"abcd\"\ndef f() -> str:\n    return S\n",
+  "func": "f",
+  "load_memory_bytes": 36,
+  "expect": {
+   "value": {
+    "S": "abcd"
+   },
+   "fuel_used": 2,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_load_mem_exhausted_string_const",
+  "source": "S: str = \"abcd\"\ndef f() -> str:\n    return S\n",
+  "func": "f",
+  "load_memory_bytes": 35,
+  "expect": {
+   "error": "oom",
+   "fuel_used": 0,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_load_fuel_charged_during_lexing",
+  "source": "def f() -> int:\n    return (\n",
+  "func": "f",
+  "load_fuel": 20,
+  "expect": {
+   "error": "fuel",
+   "fuel_used": 0,
+   "mem_used": 0
+  }
+ },
+ {
+  "name": "acct_load_fuel_lexing_error_order",
+  "source": "def f() -> int:\n    return (\n",
+  "func": "f",
+  "load_fuel": 1000,
+  "expect": {
+   "error": "parse",
+   "fuel_used": 0,
+   "mem_used": 0
+  }
+ }
+]

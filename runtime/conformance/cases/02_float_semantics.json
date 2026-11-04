@@ -1,0 +1,323 @@
+[
+ {
+  "name": "float_add",
+  "source": "def f(a: float, b: float) -> float:\n    return a + b\n",
+  "expect": {
+   "value": {
+    "F": 0.30000000000000004
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 0.1
+   },
+   {
+    "F": 0.2
+   }
+  ]
+ },
+ {
+  "name": "float_div",
+  "source": "def f(a: float, b: float) -> float:\n    return a / b\n",
+  "expect": {
+   "value": {
+    "F": 0.3333333333333333
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 1.0
+   },
+   {
+    "F": 3.0
+   }
+  ]
+ },
+ {
+  "name": "float_div_by_zero_trap",
+  "source": "def f(a: float, b: float) -> float:\n    return a / b\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "non-finite"
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 1.0
+   },
+   {
+    "F": 0.0
+   }
+  ]
+ },
+ {
+  "name": "float_zero_div_zero_trap",
+  "source": "def f(a: float, b: float) -> float:\n    return a / b\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "non-finite"
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 0.0
+   },
+   {
+    "F": 0.0
+   }
+  ]
+ },
+ {
+  "name": "float_overflow_trap",
+  "source": "def f(a: float, b: float) -> float:\n    return a * b\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "non-finite"
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 1e+308
+   },
+   {
+    "F": 10.0
+   }
+  ]
+ },
+ {
+  "name": "float_neg_zero_exists",
+  "source": "def f(a: float) -> float:\n    return -a\n",
+  "expect": {
+   "value": {
+    "F": -0.0
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 0.0
+   }
+  ]
+ },
+ {
+  "name": "float_neg_zero_equals_zero",
+  "source": "def f(a: float) -> bool:\n    return -a == a\n",
+  "expect": {
+   "value": {
+    "B": true
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 0.0
+   }
+  ]
+ },
+ {
+  "name": "float_subnormal_gradual_underflow",
+  "source": "def f(a: float, b: float) -> float:\n    return a / b\n",
+  "expect": {
+   "value": {
+    "F": 1.1125369292536007e-308
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 2.2250738585072014e-308
+   },
+   {
+    "F": 2.0
+   }
+  ]
+ },
+ {
+  "name": "float_subnormal_to_zero_no_trap",
+  "source": "def f(a: float, b: float) -> float:\n    return a / b\n",
+  "expect": {
+   "value": {
+    "F": 0.0
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 5e-324
+   },
+   {
+    "F": 2.0
+   }
+  ]
+ },
+ {
+  "name": "float_subnormal_arithmetic",
+  "source": "def f(a: float, b: float) -> float:\n    return a + b\n",
+  "expect": {
+   "value": {
+    "F": 1e-323
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 5e-324
+   },
+   {
+    "F": 5e-324
+   }
+  ]
+ },
+ {
+  "name": "float_sqrt",
+  "source": "def f(a: float) -> float:\n    return sqrt(a)\n",
+  "expect": {
+   "value": {
+    "F": 1.4142135623730951
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 2.0
+   }
+  ]
+ },
+ {
+  "name": "float_sqrt_negative_trap",
+  "source": "def f(a: float) -> float:\n    return sqrt(a)\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "sqrt"
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": -1.0
+   }
+  ]
+ },
+ {
+  "name": "float_sqrt_neg_zero_ok",
+  "source": "def f(a: float) -> float:\n    return sqrt(-a)\n",
+  "expect": {
+   "value": {
+    "F": -0.0
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 0.0
+   }
+  ]
+ },
+ {
+  "name": "float_literal_forms",
+  "source": "def f() -> float:\n    return 1. + .5 + 2e1 + 1_0.5\n",
+  "expect": {
+   "value": {
+    "F": 32.0
+   }
+  },
+  "func": "f"
+ },
+ {
+  "name": "float_nan_literal_parse_error",
+  "source": "def f() -> float:\n    return 1e999\n",
+  "expect": {
+   "error": "parse",
+   "message_contains": "finite"
+  }
+ },
+ {
+  "name": "float_abs",
+  "source": "def f(a: float) -> float:\n    return abs(a)\n",
+  "expect": {
+   "value": {
+    "F": 2.5
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": -2.5
+   }
+  ]
+ },
+ {
+  "name": "float_no_int_mixing",
+  "source": "def f(a: float, b: float) -> float:\n    return a + 1\n",
+  "expect": {
+   "error": "type"
+  }
+ },
+ {
+  "name": "float_int_div_type_error",
+  "source": "def f(a: int, b: int) -> float:\n    return a / b\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "float-only"
+  }
+ },
+ {
+  "name": "cast_float_to_int_trunc",
+  "source": "def f(a: float) -> int:\n    return int(a)\n",
+  "expect": {
+   "value": {
+    "I": -2
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": -2.9
+   }
+  ]
+ },
+ {
+  "name": "cast_float_to_int_range_trap",
+  "source": "def f(a: float) -> int:\n    return int(a)\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "range"
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 1e+30
+   }
+  ]
+ },
+ {
+  "name": "cast_float_to_int_boundary_trap",
+  "source": "def f(a: float) -> int:\n    return int(a)\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "range"
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 9.223372036854776e+18
+   }
+  ]
+ },
+ {
+  "name": "cast_int_to_float_rounds",
+  "source": "def f(a: int) -> float:\n    return float(a)\n",
+  "expect": {
+   "value": {
+    "F": 9.223372036854776e+18
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 9223372036854775807
+   }
+  ]
+ }
+]

@@ -1,0 +1,108 @@
+{
+  "schema": "evolved-continuum-task-v1",
+  "data_role": "development-only",
+  "task_variant": "dev-medium-cluster",
+  "task_variant_note": "Quarantined development variant targeting the richer sim/scenarios/dev/medium_cluster.json fixture (three tiers, 16 nodes, 5 services, 2 templates, enabled rebalancer). evolution/task/config.json is unchanged and remains the dev-small-cluster variant.",
+  "scenarios": [
+    {
+      "id": "dev-medium-cluster",
+      "path": "sim/scenarios/dev/medium_cluster.json",
+      "seeds": [224737, 350377, 611953, 821641]
+    }
+  ],
+  "development_bundle_ids": ["dev-1", "dev-2", "dev-3"],
+  "constraints": {
+    "slo_targets": {"rpc": 0.9, "batch": 0.9},
+    "goodput_target": 0.9,
+    "drop_cap": 0.05,
+    "timeout_cap": 0.05,
+    "disruption_caps": {
+      "bytes_mb": 512.0,
+      "moves": 12.0,
+      "unavailability_s": 45.0
+    },
+    "zero_cap_scales": {}
+  },
+  "boundary_weights": {"device": 1.0, "cloud": 1.0, "network": 1.0},
+  "boundary_bounds": {
+    "max_transitions_per_node": 64,
+    "network_bytes_bound": 10737418240.0
+  },
+  "ladder": {
+    "budget_registration": {
+      "status": "development-provisional",
+      "source": "G0/G-ladder quarantined measurements; P1 freeze outstanding"
+    },
+    "l0": {
+      "mode": "gross-quality",
+      "max_mean_normalized_energy": 10.0
+    },
+    "l1": {
+      "scenario_ids": ["dev-medium-cluster"],
+      "seeds_per_scenario": 1,
+      "bundle_ids": ["dev-1"],
+      "horizon_s": 50.0,
+      "max_normalized_energy": 10.0,
+      "max_summed_primitive_shortfall": 3.0
+    },
+    "epsilon_audit_fraction": 0.1,
+    "audit_root_seed": 32452843
+  },
+  "feedback_profiles": {
+    "matched-llm-vs-gp": {"enabled": false},
+    "e5-text-feedback-off": {"enabled": false},
+    "e5-text-feedback-on": {"enabled": true}
+  },
+  "islands": {
+    "survivor_selection": "phase3-lexicographic",
+    "elite_view_selection": "feasibility-complexity-fitness",
+    "profiles": [
+      {
+        "island_id": "balanced",
+        "slo_target_multiplier": 1.0,
+        "goodput_target_multiplier": 1.0,
+        "drop_cap_multiplier": 1.0,
+        "timeout_cap_multiplier": 1.0,
+        "disruption_cap_multiplier": 1.0
+      },
+      {
+        "island_id": "qos-tight",
+        "slo_target_multiplier": 1.05,
+        "goodput_target_multiplier": 1.05,
+        "drop_cap_multiplier": 0.75,
+        "timeout_cap_multiplier": 0.75,
+        "disruption_cap_multiplier": 1.0
+      },
+      {
+        "island_id": "disruption-tight",
+        "slo_target_multiplier": 1.0,
+        "goodput_target_multiplier": 1.0,
+        "drop_cap_multiplier": 1.0,
+        "timeout_cap_multiplier": 1.0,
+        "disruption_cap_multiplier": 0.5
+      },
+      {
+        "island_id": "feasibility-explorer",
+        "slo_target_multiplier": 0.9,
+        "goodput_target_multiplier": 0.9,
+        "drop_cap_multiplier": 1.5,
+        "timeout_cap_multiplier": 1.5,
+        "disruption_cap_multiplier": 1.5
+      }
+    ],
+    "archive_criteria": {
+      "loc_soft_limit": 48,
+      "loc_scale": 16.0,
+      "decision_latency_soft_us": 25.0,
+      "decision_latency_scale_us": 10.0,
+      "loc_weight": 1.0,
+      "decision_latency_weight": 1.0
+    },
+    "decision_latency_calibration": {
+      "calibration_id": "development-provisional-fuel-calibration-v1",
+      "status": "development-provisional",
+      "intercept_us": 1.0,
+      "us_per_fuel": 0.01
+    }
+  }
+}

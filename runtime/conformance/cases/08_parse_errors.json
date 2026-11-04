@@ -1,0 +1,134 @@
+[
+ {
+  "name": "tab_indent",
+  "source": "def f() -> int:\n\treturn 1\n",
+  "expect": {
+   "error": "parse",
+   "message_contains": "tab"
+  }
+ },
+ {
+  "name": "bad_dedent",
+  "source": "def f() -> int:\n    if True:\n        x = 1\n      return x\n",
+  "expect": {
+   "error": "parse"
+  }
+ },
+ {
+  "name": "big_int_literal",
+  "source": "def f() -> int:\n    return 9223372036854775808\n",
+  "expect": {
+   "error": "parse",
+   "message_contains": "range"
+  }
+ },
+ {
+  "name": "underscore_misplaced",
+  "source": "def f() -> int:\n    return 1__0\n",
+  "expect": {
+   "error": "parse",
+   "message_contains": "underscore"
+  }
+ },
+ {
+  "name": "import_not_a_thing",
+  "source": "import os\n",
+  "expect": {
+   "error": "parse"
+  }
+ },
+ {
+  "name": "while_not_a_thing",
+  "source": "def f() -> int:\n    while True:\n        pass\n    return 1\n",
+  "expect": {
+   "error": "parse"
+  }
+ },
+ {
+  "name": "lambda_not_a_thing",
+  "source": "def f() -> int:\n    g = lambda x: x\n    return 1\n",
+  "expect": {
+   "error": "parse"
+  }
+ },
+ {
+  "name": "power_op_rejected",
+  "source": "def f(a: int) -> int:\n    return a ** 2\n",
+  "expect": {
+   "error": "parse",
+   "message_contains": "**"
+  }
+ },
+ {
+  "name": "method_call_expression_rejected",
+  "source": "def f(xs: list[int]) -> int:\n    return xs.append(1)\n",
+  "expect": {
+   "error": "parse",
+   "message_contains": "method calls are not expressions"
+  }
+ },
+ {
+  "name": "bare_expression_statement",
+  "source": "def f(a: int) -> int:\n    a + 1\n    return a\n",
+  "expect": {
+   "error": "parse"
+  }
+ },
+ {
+  "name": "range_outside_for",
+  "source": "def f(n: int) -> int:\n    x = range(n)\n    return n\n",
+  "expect": {
+   "error": "parse",
+   "message_contains": "range"
+  }
+ },
+ {
+  "name": "unterminated_string",
+  "source": "def f() -> str:\n    return \"abc\n",
+  "expect": {
+   "error": "parse",
+   "message_contains": "string literal"
+  }
+ },
+ {
+  "name": "missing_param_type",
+  "source": "def f(a) -> int:\n    return 1\n",
+  "expect": {
+   "error": "parse",
+   "message_contains": "types are required"
+  }
+ },
+ {
+  "name": "missing_return_type",
+  "source": "def f(a: int):\n    return a\n",
+  "expect": {
+   "error": "parse",
+   "message_contains": "return types"
+  }
+ },
+ {
+  "name": "empty_block",
+  "source": "def f() -> int:\ndef g() -> int:\n    return 1\n",
+  "expect": {
+   "error": "parse"
+  }
+ },
+ {
+  "name": "bracket_continuation_ok",
+  "source": "def f(a: int, b: int) -> int:\n    return (a +\n            b)\n",
+  "expect": {
+   "value": {
+    "I": 3
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 1
+   },
+   {
+    "I": 2
+   }
+  ]
+ }
+]

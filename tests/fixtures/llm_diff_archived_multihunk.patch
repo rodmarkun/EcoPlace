@@ -1,0 +1,80 @@
+<<<<<<< SEARCH
+def free_fraction_after(pod: Pod, node: NodeState) -> float:
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_free = max(cpu_cap - float(node.cpu_allocated + pod.cpu_request), 0.0)
+    mem_free = max(mem_cap - float(node.mem_allocated + pod.mem_request), 0.0)
+    cpu_frac = cpu_free / cpu_cap
+    mem_frac = mem_free / mem_cap
+    balanced_free = min(cpu_frac, mem_frac)
+    average_free = (cpu_frac + mem_frac) / 2.0
+    return balanced_free * 0.80 + average_free * 0.20
+
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1.0
+    cpu_after = node.cpu_allocated + pod.cpu_request
+    mem_after = node.mem_allocated + pod.mem_request
+    if cpu_after > node.cpu_capacity or mem_after > node.mem_capacity:
+        return -1.0
+    return free_fraction_after(pod, node)
+=======
+def free_fraction_after(pod: Pod, node: NodeState) -> float:
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_after = float(node.cpu_allocated + pod.cpu_request)
+    mem_after = float(node.mem_allocated + pod.mem_request)
+    cpu_free = max(cpu_cap - cpu_after, 0.0) / cpu_cap
+    mem_free = max(mem_cap - mem_after, 0.0) / mem_cap
+    balanced_free = min(cpu_free, mem_free)
+    average_free = (cpu_free + mem_free) / 2.0
+    imbalance = max(cpu_free, mem_free) - balanced_free
+    return balanced_free * 0.70 + average_free * 0.25 - imbalance * 0.05
+
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1.0
+    cpu_after = node.cpu_allocated + pod.cpu_request
+    mem_after = node.mem_allocated + pod.mem_request
+    if cpu_after > node.cpu_capacity or mem_after > node.mem_capacity:
+        return -1.0
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_after_util = float(cpu_after) / cpu_cap
+    mem_after_util = float(mem_after) / mem_cap
+    after_pressure = max(cpu_after_util, mem_after_util)
+    balanced_headroom = free_fraction_after(pod, node)
+    return balanced_headroom * 0.85 + (1.0 - after_pressure) * 0.15
+>>>>>>> REPLACE
+
+<<<<<<< SEARCH
+    target_cpu_allocated = -1
+=======
+    target_cpu_allocated = 0
+>>>>>>> REPLACE
+
+<<<<<<< SEARCH
+                    if next_target_pressure <= next_source_pressure:
+                        out.append(move_pod(pod.id, target))
+                        planned_source_cpu = next_source_cpu
+                        planned_source_mem = next_source_mem
+                        planned_target_cpu = next_target_cpu
+                        planned_target_mem = next_target_mem
+                        moved += 1
+=======
+                    current_gap = source_pressure - target_pressure
+                    next_gap = next_source_pressure - next_target_pressure
+                    if next_gap < 0.0:
+                        next_gap = 0.0 - next_gap
+                    if next_gap < current_gap and next_target_pressure < source_pressure:
+                        out.append(move_pod(pod.id, target))
+                        planned_source_cpu = next_source_cpu
+                        planned_source_mem = next_source_mem
+                        planned_target_cpu = next_target_cpu
+                        planned_target_mem = next_target_mem
+                        source_pressure = next_source_pressure
+                        target_pressure = next_target_pressure
+                        moved += 1
+>>>>>>> REPLACE

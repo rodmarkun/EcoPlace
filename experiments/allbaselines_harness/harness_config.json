@@ -1,0 +1,55 @@
+{
+ "schema": "evolved-continuum-allbaselines-harness-config-v1",
+ "status": "development-only",
+ "confirmatory_ready": false,
+ "interpretation_boundary": "Quarantined development comparison only; never acceptance, P1/P2, held-out, or confirmatory evidence.",
+ "evaluation_replicates": 1,
+ "feedback_profile": "matched-llm-vs-gp",
+ "rung_microwork": {
+  "L0": 100000,
+  "L1": 300000,
+  "L2": 1000000
+ },
+ "distinct_energy_tolerance": 1e-06,
+ "artifact_size_guard": {
+  "max_arm_result_bytes": 10485760,
+  "max_artifact_bytes": 1073741824,
+  "max_run_bytes": 4294967296,
+  "poll_interval_seconds": 1.0,
+  "resume_compatible_config_sha256": [
+   "544973a6801c3e5d2af0e16b48454a8f8ef9159a47a0d3bd3a9211264af75dc7",
+   "57fca75676180a587a78208a48da8ca2e4595b4148cc5c19ad8f9d848780222e"
+  ]
+ },
+ "llm": {
+  "engine": "codex-cli-subscription",
+  "call_ceiling_policy": {
+   "observed_calls": 100,
+   "observed_microwork": 49000000,
+   "safety_factor_numerator": 5,
+   "safety_factor_denominator": 4,
+   "minimum_calls": 100,
+   "maximum_calls": 10000
+  },
+  "hard_wall_clock_seconds": 9000.0,
+  "config": "experiments/allbaselines_harness/codex_engine_config.json",
+  "invocation_policy": "disabled-unless---include-llm"
+ },
+ "ppo": {
+  "role": "frozen-evaluation-only-no-adaptation-budget",
+  "artifact_dir": "experiments/ppo_dev_pilot_20260809/model",
+  "expected_training_receipt_sha256": "e6df1284ed2da9a30da046769d06f7c64f1950c36450af1d60b04169aca578c9"
+ },
+ "classic_gphh_population_size": 12,
+ "seed_archive_reference_policies": [
+  "latency_greedy",
+  "energy_greedy",
+  "first_fit",
+  "least_allocated",
+  "most_allocated",
+  "network_overhead",
+  "graph_headroom"
+ ],
+ "random_ast_proposal_safety_factor": 8,
+ "evaluation_replicates_note": "EVAL_NOISE.md measured one scenario seed x the complete three-bundle set as the unique fixed-work optimum in all three comparison arms: the released work buys more candidates, and selection regret falls rather than rises. Finalists are re-scored once on a fresh multi-seed grid instead of reusing the selection grid. Four replicates cost 4x the wall-clock for no measured selection benefit."
+}

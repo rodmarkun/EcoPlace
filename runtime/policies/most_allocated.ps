@@ -1,0 +1,54 @@
+# most_allocated — a heuristic seed *inspired by* kube-scheduler's NodeResourcesFit
+# "MostAllocated" scoring (prefer the fullest node that still fits the pod; bin packing,
+# the consolidation-friendly default). It is NOT a faithful reproduction of the plugin.
+# Known divergences: continuous [0,1] scores instead of integer 0..100; actual requests
+# instead of NonZeroRequested defaulting (100m CPU / 200Mi memory for zero requests);
+# equal CPU/memory weighting instead of configured resource weights. Ties and final
+# node choice can differ from the native plugin. The faithful reproduction with golden
+# comparisons against the pinned Kubernetes plugin is TODO 6.1 (baselines phase); this
+# file only seeds evolution and sanity-checks the runtime (TODO 1.7).
+# Proposer: pack pods from the emptiest awake node onto the fullest other awake node.
+POLICY_NAME: str = "most_allocated"
+POLICY_VERSION: str = "1.0.0"
+
+def used_fraction_after(pod: Pod, node: NodeState) -> float:
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_used = min(float(node.cpu_allocated + pod.cpu_request), cpu_cap) / cpu_cap
+    mem_used = min(float(node.mem_allocated + pod.mem_request), mem_cap) / mem_cap
+    return (cpu_used + mem_used) / 2.0
+
+def cpu_util(node: NodeState) -> float:
+    return float(node.cpu_allocated) / float(max(node.cpu_capacity, 1))
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    return used_fraction_after(pod, node)
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0 or len(state.nodes) < 2:
+        return out
+    empty = -1
+    empty_u = 2.0
+    full = -1
+    full_u = -1.0
+    for node in state.nodes:
+        if not node.suspended:
+            u = cpu_util(node)
+            if u < empty_u:
+                empty_u = u
+                empty = node.id
+            if u > full_u and u < 0.9:
+                full_u = u
+                full = node.id
+    if empty < 0 or full < 0 or empty == full:
+        return out
+    if empty_u > 0.4:
+        return out
+    moved = 0
+    for pod in state.pods:
+        if moved < budget and pod.current_node == empty:
+            if not pod.stateful and not pod.has_pdb:
+                out.append(move_pod(pod.id, full))
+                moved += 1
+    return out

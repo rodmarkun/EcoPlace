@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/placementscript-core",
+    "crates/placementscript-py",
+    "crates/placementscript-wasm-guest",
+    "crates/placementscript-wasm-host",
+    "crates/placementscript-conformance",
+]
+# `cargo build --workspace --target wasm32-wasip1` is NOT valid: the py (PyO3) and host
+# (wasmtime) crates are native-only. CI builds `-p placementscript-core
+# -p placementscript-wasm-guest` for the wasm target (see .github/workflows/rust.yml).
+
+[workspace.dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+# float_roundtrip: conformance expectations are bit-exact f64 witnesses; the default
+# (faster, lossy) float parser would silently round e.g. 0.9999999999999999 to 1.0.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/RodmarKun/EvolvingContinuum"
+rust-version = "1.80"
+
+[profile.release]
+lto = "thin"
+# Deterministic, small artifacts matter for the wasm32-wasip1 deployment target (A.1/A.5).
+codegen-units = 1

@@ -1,0 +1,154 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def projected_util(node: NodeState, pod: Pod) -> float:
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap
+    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap
+    return max(cpu_after, mem_after)
+
+def node_util(node: NodeState) -> float:
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_util = float(node.cpu_allocated) / cpu_cap
+    mem_util = float(node.mem_allocated) / mem_cap
+    return max(cpu_util, mem_util)
+
+def has_pod(moved_pods: list[int], pod_id: int) -> bool:
+    for pid in moved_pods:
+        if pid == pod_id:
+            return True
+    return False
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+
+    peak = projected_util(node, pod)
+    if peak > 1.0:
+        return -1000000.0
+
+    headroom = 1.0 - peak
+    headroom_term = headroom * headroom
+
+    current = node_util(node)
+    pressure = 1.0 - current
+    pressure_term = pressure * pressure
+
+    weighted = 0.0
+    weight = 0.0
+    edges = len(ctx.graph.src)
+    for e in range(edges):
+        source = ctx.graph.src[e]
+        destination = ctx.graph.dst[e]
+        other = -1
+        if source == pod.id:
+            other = destination
+        if destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                rate = ctx.graph.rate[e]
+                latency = node.latency_to_ms[neighbor.current_node]
+                weighted = weighted + rate * latency
+                weight = weight + rate
+
+    proximity = 0.5
+    if weight > 0.0:
+        mean_latency = weighted / weight
+        scaled = mean_latency / 18.0
+        proximity = 1.0 - min(scaled, 1.0)
+        proximity = proximity * proximity
+
+    efficiency = 1.0 - min(node.power_idle_w / 120.0, 1.0)
+
+    return headroom_term * 0.40 + pressure_term * 0.10 + proximity * 0.45 + efficiency * 0.05
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0:
+        return out
+
+    moved = 0
+    moved_pods: list[int] = []
+    edges = len(graph.src)
+
+    for e in range(edges):
+        if moved >= budget:
+            return out
+
+        source_pod = state.pods[graph.src[e]]
+        dest_pod = state.pods[graph.dst[e]]
+
+        both_placed = source_pod.current_node >= 0 and dest_pod.current_node >= 0
+        different = source_pod.current_node != dest_pod.current_node
+
+        if both_placed and different:
+            source_node = state.nodes[source_pod.current_node]
+            dest_node = state.nodes[dest_pod.current_node]
+            rate = graph.rate[e]
+            current_latency = source_node.latency_to_ms[dest_pod.current_node]
+            high_latency = current_latency > 12.0
+            high_rate = rate > 0.0
+
+            if high_latency and high_rate:
+                source_movable = not source_pod.stateful and not source_pod.has_pdb
+                dest_movable = not dest_pod.stateful and not dest_pod.has_pdb
+                source_target_util = projected_util(dest_node, source_pod)
+                dest_target_util = projected_util(source_node, dest_pod)
+                source_not_moved = not has_pod(moved_pods, source_pod.id)
+                dest_not_moved = not has_pod(moved_pods, dest_pod.id)
+                source_ok = source_movable and (not dest_node.suspended) and source_target_util < 0.72 and source_not_moved
+                dest_ok = dest_movable and (not source_node.suspended) and dest_target_util < 0.72 and dest_not_moved
+
+                if source_ok and dest_ok:
+                    if source_target_util <= dest_target_util:
+                        out.append(move_pod(source_pod.id, dest_pod.current_node))
+                        moved_pods.append(source_pod.id)
+                        moved = moved + 1
+                    else:
+                        out.append(move_pod(dest_pod.id, source_pod.current_node))
+                        moved_pods.append(dest_pod.id)
+                        moved = moved + 1
+                elif source_ok:
+                    out.append(move_pod(source_pod.id, dest_pod.current_node))
+                    moved_pods.append(source_pod.id)
+                    moved = moved + 1
+                elif dest_ok:
+                    out.append(move_pod(dest_pod.id, source_pod.current_node))
+                    moved_pods.append(dest_pod.id)
+                    moved = moved + 1
+            else:
+                source_util = node_util(source_node)
+                dest_util = node_util(dest_node)
+
+                if source_util > dest_util + 0.12 and not source_pod.stateful and not source_pod.has_pdb:
+                    target_util = projected_util(dest_node, source_pod)
+                    if not dest_node.suspended and target_util < 0.65 and not has_pod(moved_pods, source_pod.id):
+                        out.append(move_pod(source_pod.id, dest_pod.current_node))
+                        moved_pods.append(source_pod.id)
+                        moved = moved + 1
+                elif dest_util > source_util + 0.12 and not dest_pod.stateful and not dest_pod.has_pdb:
+                    target_util = projected_util(source_node, dest_pod)
+                    if not source_node.suspended and target_util < 0.65 and not has_pod(moved_pods, dest_pod.id):
+                        out.append(move_pod(dest_pod.id, source_pod.current_node))
+                        moved_pods.append(dest_pod.id)
+                        moved = moved + 1
+
+    return out
+# EVOLVE-BLOCK-END

@@ -1,0 +1,97 @@
+[
+ {
+  "name": "rebind_different_type",
+  "source": "def f(a: int) -> int:\n    x = a\n    x = 1.5\n    return x\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "re-bound"
+  }
+ },
+ {
+  "name": "annotation_mismatch",
+  "source": "def f(a: int) -> int:\n    x: float = a\n    return a\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "annotation"
+  }
+ },
+ {
+  "name": "assign_to_const",
+  "source": "P: int = 4\ndef f(a: int) -> int:\n    P = a\n    return P\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "constant"
+  }
+ },
+ {
+  "name": "aug_assign_type_rules",
+  "source": "def f(a: int) -> int:\n    a /= 2\n    return a\n",
+  "expect": {
+   "error": "type"
+  }
+ },
+ {
+  "name": "condition_not_bool",
+  "source": "def f(a: int) -> int:\n    if a:\n        return 1\n    return 0\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "bool"
+  }
+ },
+ {
+  "name": "iterate_non_list",
+  "source": "def f(a: int) -> int:\n    for x in a:\n        pass\n    return a\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "iterate"
+  }
+ },
+ {
+  "name": "index_non_list",
+  "source": "def f(a: int) -> int:\n    return a[0]\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "index"
+  }
+ },
+ {
+  "name": "index_not_int",
+  "source": "def f(xs: list[int]) -> int:\n    return xs[1.0]\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "index must be int"
+  }
+ },
+ {
+  "name": "field_on_non_record",
+  "source": "def f(a: int) -> int:\n    return a.id\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "no fields"
+  }
+ },
+ {
+  "name": "const_annotation_mismatch",
+  "source": "P: int = 1.5\ndef f() -> int:\n    return P\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "annotation"
+  }
+ },
+ {
+  "name": "param_shadows_module_name",
+  "source": "P: int = 1\ndef f(P: int) -> int:\n    return P\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "shadows"
+  }
+ },
+ {
+  "name": "reserved_variable_name",
+  "source": "def f(a: int) -> int:\n    list = a\n    return a\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "reserved"
+  }
+ }
+]

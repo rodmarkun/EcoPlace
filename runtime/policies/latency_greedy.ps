@@ -1,0 +1,42 @@
+# latency_greedy — place near callers/callees: score is the negated rate-weighted RTT
+# from the candidate node to every already-placed call-graph neighbor of the pod.
+# Proposer: co-locate the source of the hottest cross-node edges next to its destination.
+# Evolution seed + sanity baseline (TODO 1.7, plan 6.1).
+POLICY_NAME: str = "latency_greedy"
+POLICY_VERSION: str = "1.0.0"
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    total = 0.0
+    m = len(ctx.graph.src)
+    for e in range(m):
+        s = ctx.graph.src[e]
+        d = ctx.graph.dst[e]
+        other = -1
+        if s == pod.id:
+            other = d
+        if d == pod.id:
+            other = s
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                total += ctx.graph.rate[e] * node.latency_to_ms[neighbor.current_node]
+    return -total
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0:
+        return out
+    moved = 0
+    m = len(graph.src)
+    for e in range(m):
+        if moved < budget and graph.rate[e] > 1.0:
+            sp = state.pods[graph.src[e]]
+            dp = state.pods[graph.dst[e]]
+            placed = sp.current_node >= 0 and dp.current_node >= 0
+            if placed and sp.current_node != dp.current_node:
+                if not sp.stateful and not sp.has_pdb:
+                    dest = state.nodes[dp.current_node]
+                    if not dest.suspended:
+                        out.append(move_pod(sp.id, dp.current_node))
+                        moved += 1
+    return out

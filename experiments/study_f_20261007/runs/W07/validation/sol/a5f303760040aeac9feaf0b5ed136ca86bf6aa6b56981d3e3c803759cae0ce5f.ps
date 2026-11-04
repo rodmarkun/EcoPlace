@@ -1,0 +1,134 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def pressure_of(cpu: int, mem: int, node: NodeState) -> float:
+    cpu_ratio = float(cpu) / float(max(node.cpu_capacity, 1))
+    mem_ratio = float(mem) / float(max(node.mem_capacity, 1))
+    return max(cpu_ratio, mem_ratio)
+
+def power_of(cpu: int, mem: int, node: NodeState) -> float:
+    pressure = pressure_of(cpu, mem, node)
+    dynamic = max(node.power_max_w - node.power_idle_w, 0.0)
+    return node.power_idle_w + dynamic * pressure
+
+def queue_of(pressure: float) -> float:
+    headroom = max(1.0 - pressure, 0.02)
+    return pressure * pressure / headroom
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000000.0
+
+    cpu_after = node.cpu_allocated + pod.cpu_request
+    mem_after = node.mem_allocated + pod.mem_request
+    pressure = pressure_of(cpu_after, mem_after, node)
+    if pressure > 1.0:
+        return -1000000000.0
+
+    before_pressure = pressure_of(node.cpu_allocated, node.mem_allocated, node)
+    queue_cost = queue_of(pressure)
+    queue_increase = max(queue_cost - queue_of(before_pressure), 0.0)
+
+    weighted = 0.0
+    weighted_square = 0.0
+    weight = 0.0
+    worst = 0.0
+    incoming_worst = 0.0
+    outgoing_worst = 0.0
+
+    for e in range(len(ctx.graph.src)):
+        source = ctx.graph.src[e]
+        destination = ctx.graph.dst[e]
+        other = -1
+        if source == pod.id:
+            other = destination
+        elif destination == pod.id:
+            other = source
+
+        if other >= 0 and other != pod.id and ctx.graph.rate[e] > 0.0:
+            neighbor_index = ctx.pods[other].current_node
+            latency = 22.5
+            neighbor_pressure = 0.0
+            if neighbor_index >= 0:
+                neighbor = ctx.nodes[neighbor_index]
+                latency = node.latency_to_ms[neighbor_index]
+                if destination == pod.id:
+                    latency = neighbor.latency_to_ms[node.id]
+                neighbor_pressure = pressure_of(
+                    neighbor.cpu_allocated, neighbor.mem_allocated, neighbor
+                )
+                if neighbor_index == node.id:
+                    neighbor_pressure = pressure
+
+            # Both endpoints consume burst margin, including on colocated calls.
+            neighbor_queue = queue_of(neighbor_pressure)
+            endpoint_queue = queue_cost + neighbor_queue
+            # Queue delay persists even when a colocated link has zero latency.
+            effective_latency = latency * (
+                1.0 + endpoint_queue * 0.15
+            ) + endpoint_queue * 2.0
+            rate = ctx.graph.rate[e]
+            weighted = weighted + rate * effective_latency
+            weighted_square = weighted_square + rate * effective_latency * effective_latency
+            weight = weight + rate
+            worst = max(worst, effective_latency)
+            if destination == pod.id:
+                incoming_worst = max(incoming_worst, effective_latency)
+            else:
+                outgoing_worst = max(outgoing_worst, effective_latency)
+
+    # Unplaced dependencies retain the parent's neutral proximity assumption.
+    mean = 22.5
+    mean_square = 506.25
+    if weight > 0.0:
+        mean = weighted / weight
+        mean_square = weighted_square / weight
+
+    # Worst legs protect low-rate dependencies that a weighted mean can hide.
+    path_latency = incoming_worst + outgoing_worst
+    latency_cost = mean / 35.0 + worst / 45.0 + path_latency / 90.0
+    tail_cost = mean_square / 1600.0
+    timeout_cost = max(worst - 40.0, 0.0) / 15.0
+    path_timeout_cost = max(path_latency - 80.0, 0.0) / 30.0
+
+    # Reserve capacity before bursts turn offered requests into failures.
+    burst_cost = max(pressure - 0.50, 0.0)
+    overload_cost = max(pressure - 0.65, 0.0)
+    resident_cost = before_pressure * queue_increase
+
+    before_power = power_of(node.cpu_allocated, node.mem_allocated, node)
+    if node.cpu_allocated == 0 and node.mem_allocated == 0 and node.suspendable:
+        before_power = 0.0
+    after_power = power_of(cpu_after, mem_after, node)
+    marginal_power = max(after_power - before_power, 0.0)
+    # Penalize risk increasingly; bound energy's influence on placement.
+    cost = queue_cost * 1.30 + queue_increase * 0.50
+    cost = cost + resident_cost * 0.60
+    cost = cost + burst_cost * 16.0 + overload_cost * 90.0
+    cost = cost + overload_cost * overload_cost * 120.0
+    cost = cost + latency_cost * 1.80 + tail_cost * 0.75
+    cost = cost + timeout_cost * 3.0 + path_timeout_cost * 2.0
+    cost = cost + timeout_cost * timeout_cost * 2.0
+    cost = cost + path_timeout_cost * path_timeout_cost * 1.50
+    cost = cost + min(marginal_power / 400.0, 0.35)
+    return -cost
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    # No cumulative disruption allowance is exposed. Avoid spending unknown
+    # migration, byte, or unavailability budgets across controller windows.
+    return out
+# EVOLVE-BLOCK-END

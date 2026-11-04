@@ -1,0 +1,100 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def utilization(cpu: int, mem: int, node: NodeState) -> float:
+    cpu_fraction = float(cpu) / float(max(node.cpu_capacity, 1))
+    mem_fraction = float(mem) / float(max(node.mem_capacity, 1))
+    return max(cpu_fraction, mem_fraction)
+
+def queue_cost(peak: float) -> float:
+    remaining = max(1.0 - peak, 0.02)
+    pressure = peak / remaining
+    burst_excess = max(peak - 0.55, 0.0)
+    return pressure + 30.0 * burst_excess * burst_excess
+
+def modeled_power(cpu: int, mem: int, node: NodeState) -> float:
+    if cpu <= 0 and mem <= 0 and node.suspendable:
+        return 0.0
+    cpu_fraction = float(max(cpu, 0)) / float(max(node.cpu_capacity, 1))
+    dynamic = max(node.power_max_w - node.power_idle_w, 0.0)
+    return node.power_idle_w + dynamic * min(cpu_fraction, 1.0)
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+    cpu_before = node.cpu_allocated
+    mem_before = node.mem_allocated
+    if pod.current_node == node.id:
+        cpu_before = max(cpu_before - pod.cpu_request, 0)
+        mem_before = max(mem_before - pod.mem_request, 0)
+    cpu_after = cpu_before + pod.cpu_request
+    mem_after = mem_before + pod.mem_request
+    peak = utilization(cpu_after, mem_after, node)
+    if peak > 1.0:
+        return -1000000.0
+
+    weighted = 0.0
+    weight = 0.0
+    worst = 0.0
+    neighbor_pressure = 0.0
+    for e in range(len(ctx.graph.src)):
+        source = ctx.graph.src[e]
+        destination = ctx.graph.dst[e]
+        other = -1
+        if source == pod.id:
+            other = destination
+        elif destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            rate = ctx.graph.rate[e]
+            if neighbor.current_node >= 0 and rate > 0.0:
+                peer = ctx.nodes[neighbor.current_node]
+                latency = 0.0
+                peer_peak = peak
+                if neighbor.current_node != node.id:
+                    latency = node.latency_to_ms[neighbor.current_node]
+                    if destination == pod.id:
+                        latency = peer.latency_to_ms[node.id]
+                    peer_peak = utilization(peer.cpu_allocated, peer.mem_allocated, peer)
+                weighted = weighted + rate * latency
+                weight = weight + rate
+                worst = max(worst, latency)
+                neighbor_pressure = neighbor_pressure + rate * queue_cost(peer_peak)
+
+    mean_latency = 22.5
+    peer_cost = 0.0
+    if weight > 0.0:
+        mean_latency = weighted / weight
+        peer_cost = neighbor_pressure / weight
+
+    before_power = modeled_power(cpu_before, mem_before, node)
+    after_power = modeled_power(cpu_after, mem_after, node)
+    incremental_power = max(after_power - before_power, 0.0)
+
+    # Queueing and long links dominate energy until substantial burst margin exists.
+    latency_cost = mean_latency / 15.0 + worst / 30.0
+    pressure_cost = 2.5 * queue_cost(peak) + 0.5 * peer_cost
+    energy_cost = incremental_power / 120.0
+    return -(pressure_cost + latency_cost + energy_cost)
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    # The exposed state contains no remaining cumulative disruption allowance.
+    # Keeping this empty preserves migration, byte and unavailability budgets;
+    # energy improvements come from placement without recurring disruptions.
+    return out
+# EVOLVE-BLOCK-END

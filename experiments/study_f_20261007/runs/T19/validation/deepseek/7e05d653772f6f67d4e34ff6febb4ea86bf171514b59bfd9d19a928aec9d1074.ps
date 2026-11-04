@@ -1,0 +1,183 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def resource_headroom(used: int, capacity: int) -> int:
+    if capacity <= 0:
+        return 0
+    free = capacity - used
+    if free <= 0:
+        return 0
+    return (free * 100) // capacity
+
+def node_is_hot(node: NodeState) -> bool:
+    if node.cpu_capacity <= 0 or node.mem_capacity <= 0:
+        return False
+    cpu_util = float(node.cpu_allocated) / float(node.cpu_capacity)
+    mem_util = float(node.mem_allocated) / float(node.mem_capacity)
+    return cpu_util > 0.75 or mem_util > 0.85
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.cpu_capacity <= 0 or node.mem_capacity <= 0:
+        return -1000000.0
+    cpu_after = node.cpu_allocated + pod.cpu_request
+    mem_after = node.mem_allocated + pod.mem_request
+    if cpu_after > node.cpu_capacity or mem_after > node.mem_capacity:
+        return -1000000.0
+
+    weighted_latency = 0.0
+    total_rate = 0.0
+    for edge in range(len(ctx.graph.src)):
+        source = ctx.graph.src[edge]
+        destination = ctx.graph.dst[edge]
+        other = -1
+        if source == pod.id:
+            other = destination
+        if destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                rate = ctx.graph.rate[edge]
+                weighted_latency += node.latency_to_ms[neighbor.current_node] * rate
+                total_rate += rate
+
+    avg_latency = 0.0
+    if total_rate > 0.0:
+        avg_latency = weighted_latency / total_rate
+
+    cpu_util = float(cpu_after) / float(node.cpu_capacity)
+    mem_util = float(mem_after) / float(node.mem_capacity)
+
+    cpu_frac = float(pod.cpu_request) / float(node.cpu_capacity)
+    marginal_power = (node.power_max_w - node.power_idle_w) * cpu_frac
+    if node.cpu_allocated == 0:
+        marginal_power += node.power_idle_w
+
+    queue_penalty = 0.0
+    if cpu_util > 0.70:
+        queue_penalty = (cpu_util - 0.70) * 250.0
+    if mem_util > 0.80:
+        queue_penalty += (mem_util - 0.80) * 150.0
+    if cpu_util > 0.90:
+        queue_penalty += (cpu_util - 0.90) * 500.0
+
+    headroom = resource_headroom(cpu_after, node.cpu_capacity) + resource_headroom(mem_after, node.mem_capacity)
+    headroom_bonus = float(headroom) * 0.35
+
+    active_bonus = 0.0
+    if node.cpu_allocated > 0:
+        active_bonus = 35.0
+
+    suspend_penalty = 0.0
+    if node.suspended:
+        suspend_penalty = 150.0
+        if node.suspendable:
+            suspend_penalty = 80.0
+
+    capacity_bonus = float(node.cpu_capacity) * 0.001
+    energy_penalty = marginal_power * 0.08
+    latency_penalty = avg_latency * 3.0
+
+    return headroom_bonus + active_bonus + capacity_bonus - energy_penalty - latency_penalty - queue_penalty - suspend_penalty
+
+def move_score(pod: Pod, node: NodeState, state: ClusterState, graph: CallGraphCtx) -> float:
+    if node.cpu_capacity <= 0 or node.mem_capacity <= 0:
+        return -1000000.0
+    if node.suspended:
+        return -1000000.0
+    cpu_after = node.cpu_allocated + pod.cpu_request
+    mem_after = node.mem_allocated + pod.mem_request
+    if cpu_after > node.cpu_capacity or mem_after > node.mem_capacity:
+        return -1000000.0
+
+    cpu_util = float(cpu_after) / float(node.cpu_capacity)
+    mem_util = float(mem_after) / float(node.mem_capacity)
+    if cpu_util > 0.85 or mem_util > 0.90:
+        return -1000000.0
+
+    weighted_latency = 0.0
+    total_rate = 0.0
+    for edge in range(len(graph.src)):
+        source = graph.src[edge]
+        destination = graph.dst[edge]
+        other = -1
+        if source == pod.id:
+            other = destination
+        if destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor = state.pods[other]
+            if neighbor.current_node >= 0:
+                rate = graph.rate[edge]
+                weighted_latency += node.latency_to_ms[neighbor.current_node] * rate
+                total_rate += rate
+
+    avg_latency = 0.0
+    if total_rate > 0.0:
+        avg_latency = weighted_latency / total_rate
+
+    cpu_frac = float(pod.cpu_request) / float(node.cpu_capacity)
+    marginal_power = (node.power_max_w - node.power_idle_w) * cpu_frac
+    if node.cpu_allocated == 0:
+        marginal_power += node.power_idle_w
+
+    queue_penalty = 0.0
+    if cpu_util > 0.65:
+        queue_penalty = (cpu_util - 0.65) * 300.0
+    if mem_util > 0.75:
+        queue_penalty += (mem_util - 0.75) * 150.0
+
+    headroom = resource_headroom(cpu_after, node.cpu_capacity) + resource_headroom(mem_after, node.mem_capacity)
+    headroom_bonus = float(headroom) * 0.35
+
+    active_bonus = 0.0
+    if node.cpu_allocated > 0:
+        active_bonus = 20.0
+
+    capacity_bonus = float(node.cpu_capacity) * 0.001
+    energy_penalty = marginal_power * 0.08
+    latency_penalty = avg_latency * 3.5
+
+    return headroom_bonus + active_bonus + capacity_bonus - energy_penalty - latency_penalty - queue_penalty
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0:
+        return out
+    moves_made = 0
+    for i in range(len(state.pods)):
+        if moves_made >= budget:
+            return out
+        pod = state.pods[i]
+        eligible = pod.current_node >= 0 and pod.stateful == False and pod.has_pdb == False
+        if eligible:
+            current_node = state.nodes[pod.current_node]
+            if node_is_hot(current_node):
+                current_score = move_score(pod, current_node, state, graph)
+                best_score = current_score + 8.0
+                best_node = -1
+                for j in range(len(state.nodes)):
+                    if j != pod.current_node:
+                        candidate = state.nodes[j]
+                        candidate_score = move_score(pod, candidate, state, graph)
+                        if candidate_score > best_score:
+                            best_score = candidate_score
+                            best_node = j
+                if best_node >= 0:
+                    out.append(move_pod(pod.id, best_node))
+                    moves_made += 1
+    return out
+# EVOLVE-BLOCK-END

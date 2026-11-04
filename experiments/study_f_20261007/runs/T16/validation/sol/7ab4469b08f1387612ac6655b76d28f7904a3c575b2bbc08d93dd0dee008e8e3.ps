@@ -1,0 +1,84 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.cpu_capacity <= 0 or node.mem_capacity <= 0:
+        return -1000000000.0
+
+    cpu_before = node.cpu_allocated
+    mem_before = node.mem_allocated
+    if pod.current_node == node.id:
+        cpu_before = max(0, cpu_before - pod.cpu_request)
+        mem_before = max(0, mem_before - pod.mem_request)
+
+    cpu_after = cpu_before + pod.cpu_request
+    mem_after = mem_before + pod.mem_request
+    if cpu_after > node.cpu_capacity or mem_after > node.mem_capacity:
+        return -1000000000.0
+
+    cpu_old = float(cpu_before) / float(node.cpu_capacity)
+    cpu_load = float(cpu_after) / float(node.cpu_capacity)
+    mem_load = float(mem_after) / float(node.mem_capacity)
+
+    incoming = 0.0
+    outgoing = 0.0
+    longest_incoming = 0.0
+    longest_outgoing = 0.0
+    for edge in range(len(ctx.graph.src)):
+        source = ctx.graph.src[edge]
+        destination = ctx.graph.dst[edge]
+        other = -1
+        if source == pod.id:
+            other = destination
+        elif destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor_node = ctx.pods[other].current_node
+            if neighbor_node >= 0:
+                latency = 0.0
+                if source == pod.id:
+                    latency = node.latency_to_ms[neighbor_node]
+                    outgoing += latency
+                    longest_outgoing = max(longest_outgoing, latency)
+                else:
+                    latency = ctx.nodes[neighbor_node].latency_to_ms[node.id]
+                    incoming += latency
+                    longest_incoming = max(longest_incoming, latency)
+
+    cpu_slack = max(0.02, 1.0 - cpu_load)
+    queue_cost = 10.0 * cpu_load * cpu_load / cpu_slack
+    cpu_excess = max(0.0, cpu_load - 0.60)
+    queue_cost += 800.0 * cpu_excess * cpu_excess
+
+    memory_excess = max(0.0, mem_load - 0.75)
+    memory_cost = 10.0 * mem_load
+    memory_cost += 400.0 * memory_excess * memory_excess
+
+    power_span = max(0.0, node.power_max_w - node.power_idle_w)
+    incremental_power = power_span * max(0.0, cpu_load - cpu_old)
+    if cpu_before == 0 or node.suspended:
+        incremental_power += node.power_idle_w
+
+    network_cost = incoming + outgoing
+    critical_path_cost = 3.0 * (longest_incoming + longest_outgoing)
+    cost = network_cost + critical_path_cost + queue_cost + memory_cost
+    cost += 0.005 * incremental_power
+    return -cost
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    return out
+# EVOLVE-BLOCK-END

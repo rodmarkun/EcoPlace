@@ -1,0 +1,112 @@
+<<<<<<< SEARCH
+def free_fraction_after(pod: Pod, node: NodeState) -> float:
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_free = cpu_cap - float(node.cpu_allocated + pod.cpu_request)
+    mem_free = mem_cap - float(node.mem_allocated + pod.mem_request)
+    cpu_frac = max(cpu_free, 0.0) / cpu_cap
+    mem_frac = max(mem_free, 0.0) / mem_cap
+    return (cpu_frac + mem_frac) / 2.0
+
+
+def cpu_util(node: NodeState) -> float:
+    return float(node.cpu_allocated) / float(max(node.cpu_capacity, 1))
+
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    return free_fraction_after(pod, node)
+
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0 or len(state.nodes) < 2:
+        return out
+    hi = -1
+    hi_u = -1.0
+    lo = -1
+    lo_u = 2.0
+    for node in state.nodes:
+        if not node.suspended:
+            u = cpu_util(node)
+            if u > hi_u:
+                hi_u = u
+                hi = node.id
+            if u < lo_u:
+                lo_u = u
+                lo = node.id
+    if hi < 0 or lo < 0 or hi == lo or hi_u - lo_u < 0.25:
+        return out
+    moved = 0
+    for pod in state.pods:
+        if moved < budget and pod.current_node == hi:
+            if not pod.stateful and not pod.has_pdb:
+                out.append(move_pod(pod.id, lo))
+                moved += 1
+    return out
+=======
+def free_fraction_after(pod: Pod, node: NodeState) -> float:
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_free = cpu_cap - float(node.cpu_allocated + pod.cpu_request)
+    mem_free = mem_cap - float(node.mem_allocated + pod.mem_request)
+    cpu_frac = max(cpu_free, 0.0) / cpu_cap
+    mem_frac = max(mem_free, 0.0) / mem_cap
+    return min(cpu_frac, mem_frac)
+
+
+def resource_util(node: NodeState) -> float:
+    cpu_util = float(node.cpu_allocated) / float(max(node.cpu_capacity, 1))
+    mem_util = float(node.mem_allocated) / float(max(node.mem_capacity, 1))
+    return max(cpu_util, mem_util)
+
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1.0
+    if node.cpu_allocated + pod.cpu_request > node.cpu_capacity:
+        return -1.0
+    if node.mem_allocated + pod.mem_request > node.mem_capacity:
+        return -1.0
+    return free_fraction_after(pod, node)
+
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0 or len(state.nodes) < 2:
+        return out
+    hi = -1
+    hi_u = -1.0
+    lo = -1
+    lo_u = 2.0
+    lo_cpu_capacity = 0
+    lo_mem_capacity = 0
+    lo_cpu_allocated = 0
+    lo_mem_allocated = 0
+    for node in state.nodes:
+        if not node.suspended:
+            u = resource_util(node)
+            if u > hi_u:
+                hi_u = u
+                hi = node.id
+            if u < lo_u:
+                lo_u = u
+                lo = node.id
+                lo_cpu_capacity = node.cpu_capacity
+                lo_mem_capacity = node.mem_capacity
+                lo_cpu_allocated = node.cpu_allocated
+                lo_mem_allocated = node.mem_allocated
+    if hi < 0 or lo < 0 or hi == lo or hi_u - lo_u < 0.25:
+        return out
+    moved = 0
+    for pod in state.pods:
+        if moved < budget and pod.current_node == hi:
+            if not pod.stateful and not pod.has_pdb:
+                next_cpu = lo_cpu_allocated + pod.cpu_request
+                next_mem = lo_mem_allocated + pod.mem_request
+                if next_cpu <= lo_cpu_capacity and next_mem <= lo_mem_capacity:
+                    out.append(move_pod(pod.id, lo))
+                    lo_cpu_allocated = next_cpu
+                    lo_mem_allocated = next_mem
+                    moved += 1
+    return out
+>>>>>>> REPLACE

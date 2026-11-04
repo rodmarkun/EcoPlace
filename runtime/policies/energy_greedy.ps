@@ -1,0 +1,65 @@
+# energy_greedy — minimize marginal wall power: prefer awake nodes with a flat power
+# curve, penalize placing onto suspended nodes (implies a priced wake, C17/C22) and
+# avoid opening empty awake nodes. Proposer: consolidation — drain the least-utilized
+# awake suspendable node onto the most idle-efficient destination, waking one node only
+# as a last resort (explicit priced wake action). Evolution seed + sanity baseline.
+POLICY_NAME: str = "energy_greedy"
+POLICY_VERSION: str = "1.0.0"
+
+def marginal_power(pod: Pod, node: NodeState) -> float:
+    cap = float(max(node.cpu_capacity, 1))
+    span = max(node.power_max_w - node.power_idle_w, 0.0)
+    return span * (float(pod.cpu_request) / cap)
+
+def idle_efficiency(node: NodeState) -> float:
+    return node.power_idle_w / float(max(node.cpu_capacity, 1))
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    cost = marginal_power(pod, node)
+    if node.suspended:
+        cost += node.power_idle_w + 5.0
+    if node.cpu_allocated == 0 and not node.suspended:
+        cost += node.power_idle_w * 0.5
+    return -cost
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0 or len(state.nodes) < 2:
+        return out
+    drain = -1
+    drain_u = 2.0
+    for node in state.nodes:
+        if node.suspendable and not node.suspended:
+            u = float(node.cpu_allocated) / float(max(node.cpu_capacity, 1))
+            if u < drain_u and u < 0.3:
+                drain_u = u
+                drain = node.id
+    if drain < 0:
+        return out
+    target = -1
+    best = 1e18
+    moved = 0
+    for node in state.nodes:
+        if not node.suspended and node.id != drain:
+            eff = idle_efficiency(node)
+            if eff < best:
+                best = eff
+                target = node.id
+    if target < 0:
+        for node in state.nodes:
+            if node.suspended and node.id != drain:
+                eff = idle_efficiency(node)
+                if eff < best:
+                    best = eff
+                    target = node.id
+        if target < 0 or budget < 2:
+            return out
+        # Waking is an explicit priced action and counts against the budget (spec §5.5).
+        out.append(wake(target))
+        moved = 1
+    for pod in state.pods:
+        if moved < budget and pod.current_node == drain:
+            if not pod.stateful and not pod.has_pdb:
+                out.append(move_pod(pod.id, target))
+                moved += 1
+    return out

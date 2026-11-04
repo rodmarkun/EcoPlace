@@ -1,0 +1,119 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def peak_after(node: NodeState, cpu_req: int, mem_req: int) -> float:
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_after = float(node.cpu_allocated + cpu_req) / cpu_cap
+    mem_after = float(node.mem_allocated + mem_req) / mem_cap
+    return max(cpu_after, mem_after)
+
+def estimated_power(node: NodeState, peak: float) -> float:
+    idle = node.power_idle_w
+    maxp = node.power_max_w
+    return idle + (maxp - idle) * peak
+
+def proximity_score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    weighted = 0.0
+    weight = 0.0
+    max_lat = 0.0
+    edges = len(ctx.graph.src)
+    for e in range(edges):
+        source = ctx.graph.src[e]
+        destination = ctx.graph.dst[e]
+        other = -1
+        if source == pod.id:
+            other = destination
+        if destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                rate = ctx.graph.rate[e]
+                lat = node.latency_to_ms[neighbor.current_node]
+                weighted = weighted + rate * lat
+                weight = weight + rate
+                if lat > max_lat:
+                    max_lat = lat
+
+    proximity = 0.5
+    if weight > 0.0:
+        mean_lat = weighted / weight
+        proximity = 1.0 - min(mean_lat / 30.0, 1.0)
+    if max_lat > 0.0:
+        tail_penalty = 0.25 * min(max_lat / 80.0, 1.0)
+        proximity = proximity - tail_penalty
+    if proximity < 0.0:
+        proximity = 0.0
+    return proximity
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+
+    peak = peak_after(node, pod.cpu_request, pod.mem_request)
+    if peak > 1.0:
+        return -1000000.0
+
+    headroom = 1.0 - peak
+    headroom_sq = headroom * headroom
+
+    proximity = proximity_score(pod, node, ctx)
+
+    estimated = estimated_power(node, peak)
+    power_score = 1.0 - min(estimated / 120.0, 1.0)
+
+    return headroom_sq * 0.45 + proximity * 0.45 + power_score * 0.10
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0:
+        return out
+
+    moved = 0
+    edges = len(graph.src)
+    for e in range(edges):
+        if moved >= budget:
+            return out
+
+        source_pod = state.pods[graph.src[e]]
+        dest_pod = state.pods[graph.dst[e]]
+        both_placed = source_pod.current_node >= 0 and dest_pod.current_node >= 0
+
+        if both_placed and source_pod.current_node != dest_pod.current_node:
+            source_node = state.nodes[source_pod.current_node]
+            dest_node = state.nodes[dest_pod.current_node]
+
+            current_lat = source_node.latency_to_ms[dest_pod.current_node]
+            rate = graph.rate[e]
+            benefit = rate * current_lat
+
+            if benefit > 2.0:
+                peak_d = peak_after(dest_node, source_pod.cpu_request, source_pod.mem_request)
+                peak_s = peak_after(source_node, dest_pod.cpu_request, dest_pod.mem_request)
+
+                source_movable = not source_pod.stateful and not source_pod.has_pdb
+                dest_movable = not dest_pod.stateful and not dest_pod.has_pdb
+
+                if source_movable and not dest_node.suspended and peak_d < 0.55 and peak_d <= peak_s:
+                    out.append(move_pod(source_pod.id, dest_pod.current_node))
+                    moved = moved + 1
+                elif dest_movable and not source_node.suspended and peak_s < 0.55:
+                    out.append(move_pod(dest_pod.id, source_pod.current_node))
+                    moved = moved + 1
+
+    return out
+# EVOLVE-BLOCK-END

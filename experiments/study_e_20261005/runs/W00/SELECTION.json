@@ -1,0 +1,212 @@
+{
+  "arms": {
+    "gp": {
+      "champion": {
+        "candidate_id": "W00:gp:00000027",
+        "proposal_seq": 27,
+        "search_fitness": {
+          "direction": "lower-is-better",
+          "feasible": true,
+          "infeasibility_vector": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "n_bundles": 3,
+          "n_instances": 4,
+          "normalized_energy": 1.0088666436668692,
+          "proposal_seq": 27,
+          "sort_key": [
+            0,
+            1.0088666436668692,
+            27
+          ],
+          "summed_primitive_shortfall": 0.0
+        },
+        "source": "# ruff: noqa: F821\n# graph_headroom \u2014 evolution seed for the dev-continuum-* family.  Identity stays\n# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.\n#\n# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the\n# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so\n# seeding from one would start every arm outside the feasible region and turn the first\n# half of every campaign into a feasibility hunt rather than a search.  This seed is the\n# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one\n# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate \u2014 the\n# search starts feasible and has an explicit, large energy gap to close rather than\n# starting at the best baseline with nowhere to go.\nPOLICY_NAME: str = \"graph_headroom\"\nPOLICY_VERSION: str = \"1.0.0\"\n\n# EVOLVE-BLOCK-START\ndef resource_score(requested: int, capacity: int) -> int:\n    if capacity == 0 or requested > capacity:\n        return 0\n    return ((capacity - requested) * (capacity)) // capacity\n\ndef score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:\n    cpu = resource_score(node.cpu_allocated + pod.cpu_request, node.cpu_capacity)\n    mem = resource_score(node.mem_allocated + pod.mem_request, node.mem_capacity)\n    return float((cpu + mem) // 2)\n\ndef propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:\n    out: list[Move] = []\n    return out\n# EVOLVE-BLOCK-END\n",
+        "source_sha256": "9fc3339d15ef84d4ffadb0a3ad10728f8469ecbee4f9a316e71d4acae915663e"
+      },
+      "completed_candidates": 81,
+      "full_records": 20,
+      "stage_exit": 0,
+      "terminal": {
+        "actual_microwork": 55400000,
+        "budget_carry_microwork": 600000,
+        "candidate_safety_ceiling": 562,
+        "carried_incumbent_id": "W00:gp:00000027",
+        "completed_candidates": 81,
+        "confirmatory_postflight_receipt_required": true,
+        "effective_terminal_microwork": 56000000,
+        "reason": "normalized-work-budget-exhausted",
+        "registered_max_microwork": 56000000,
+        "remaining_microwork": 600000,
+        "run_purpose": "scientific-full-work",
+        "status": "complete",
+        "terminal_budget_policy": "carry-to-work-limit",
+        "unused_microwork_discarded": 0,
+        "usable_for_confirmatory_analysis": false
+      }
+    },
+    "llm": {
+      "atN_slots": 20,
+      "champion": {
+        "candidate_id": "W00:llm:00000047",
+        "proposal_seq": 47,
+        "search_fitness": {
+          "direction": "lower-is-better",
+          "feasible": false,
+          "infeasibility_vector": [
+            0.007459073835367537,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "n_bundles": 3,
+          "n_instances": 4,
+          "normalized_energy": null,
+          "proposal_seq": 47,
+          "sort_key": [
+            1,
+            0.007459073835367537,
+            0.0,
+            0.0,
+            0.0,
+            0.02983629534147015,
+            47
+          ],
+          "summed_primitive_shortfall": 0.02983629534147015
+        },
+        "source": "# ruff: noqa: F821\n# graph_headroom \u2014 evolution seed for the dev-continuum-* family.  Identity stays\n# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.\n#\n# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the\n# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so\n# seeding from one would start every arm outside the feasible region and turn the first\n# half of every campaign into a feasibility hunt rather than a search.  This seed is the\n# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one\n# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate \u2014 the\n# search starts feasible and has an explicit, large energy gap to close rather than\n# starting at the best baseline with nowhere to go.\nPOLICY_NAME: str = \"graph_headroom\"\nPOLICY_VERSION: str = \"1.0.0\"\n\n# EVOLVE-BLOCK-START\ndef graph_penalty(pod: Pod, node: NodeState, pods: list[Pod], graph: CallGraphCtx) -> float:\n    penalty: float = 0.0\n    n: int = len(graph.src)\n    for i in range(n):\n        src_i: int = graph.src[i]\n        dst_i: int = graph.dst[i]\n        src_pod: Pod = pods[src_i]\n        dst_pod: Pod = pods[dst_i]\n        if src_pod.id == pod.id:\n            other_node: int = dst_pod.current_node\n            if other_node >= 0:\n                lat: float = node.latency_to_ms[other_node]\n                penalty = penalty + lat\n        elif dst_pod.id == pod.id:\n            other_node: int = src_pod.current_node\n            if other_node >= 0:\n                lat: float = node.latency_to_ms[other_node]\n                penalty = penalty + lat\n    return penalty\n\ndef base_score(pod: Pod, node: NodeState, pods: list[Pod], graph: CallGraphCtx, cpu_after: int, mem_after: int) -> float:\n    if node.suspended:\n        return -1000000.0\n    if node.cpu_capacity <= 0 or node.mem_capacity <= 0:\n        return -1000000.0\n    if cpu_after > node.cpu_capacity or mem_after > node.mem_capacity:\n        return -1000000.0\n    cpu_util: float = float(cpu_after) / float(node.cpu_capacity)\n    mem_util: float = float(mem_after) / float(node.mem_capacity)\n    max_util: float = cpu_util\n    if mem_util > max_util:\n        max_util = mem_util\n    headroom: float = 1.0 - max_util\n    if headroom < 0.0:\n        headroom = 0.0\n    headroom2: float = headroom * headroom\n    power: float = node.power_idle_w + (node.power_max_w - node.power_idle_w) * max_util\n    comm: float = graph_penalty(pod, node, pods, graph)\n    over: float = 0.0\n    if max_util > 0.70:\n        over = (max_util - 0.70) * (max_util - 0.70) * 50000.0\n    if cpu_util > 0.80:\n        over = over + (cpu_util - 0.80) * (cpu_util - 0.80) * 80000.0\n    if mem_util > 0.80:\n        over = over + (mem_util - 0.80) * (mem_util - 0.80) * 80000.0\n    return 40000.0 * headroom2 - 2.0 * power - 15.0 * comm - over\n\ndef score_node(pod: Pod, node: NodeState, pods: list[Pod], graph: CallGraphCtx) -> float:\n    return base_score(pod, node, pods, graph, node.cpu_allocated + pod.cpu_request, node.mem_allocated + pod.mem_request)\n\ndef score_current(pod: Pod, node: NodeState, pods: list[Pod], graph: CallGraphCtx) -> float:\n    return base_score(pod, node, pods, graph, node.cpu_allocated, node.mem_allocated)\n\ndef score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:\n    return score_node(pod, node, ctx.pods, ctx.graph)\n\ndef propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:\n    out: list[Move] = []\n    if budget <= 0:\n        return out\n    limit: int = budget\n    if limit > 2:\n        limit = 2\n    moves_made: int = 0\n    for pod in state.pods:\n        if moves_made >= limit:\n            return out\n        cur: int = pod.current_node\n        if cur >= 0:\n            cur_node: NodeState = state.nodes[cur]\n            cur_score: float = score_current(pod, cur_node, state.pods, graph)\n            best_j: int = -1\n            best_score: float = cur_score\n            j: int = 0\n            for node in state.nodes:\n                if j != cur:\n                    s: float = score_node(pod, node, state.pods, graph)\n                    if s > best_score:\n                        best_score = s\n                        best_j = j\n                j = j + 1\n            move_cost: float = 2000.0\n            if pod.stateful:\n                move_cost = move_cost + 5000.0\n            if pod.has_pdb:\n                move_cost = move_cost + 1000.0\n            move_cost = move_cost + 0.2 * float(pod.image_mb)\n            if best_j >= 0 and best_score > cur_score + move_cost:\n                out.append(move_pod(pod.id, best_j))\n                moves_made = moves_made + 1\n    return out\n# EVOLVE-BLOCK-END\n",
+        "source_sha256": "14ea306be2c134221b8e23c8d4c726e7305a3c9fde10a4b3ea880da47f10ba6b"
+      },
+      "champion_atN": {
+        "candidate_id": "W00:llm:00000003",
+        "proposal_seq": 3,
+        "search_fitness": {
+          "direction": "lower-is-better",
+          "feasible": false,
+          "infeasibility_vector": [
+            0.01474637035859009,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "n_bundles": 3,
+          "n_instances": 4,
+          "normalized_energy": null,
+          "proposal_seq": 3,
+          "sort_key": [
+            1,
+            0.01474637035859009,
+            0.0,
+            0.0,
+            0.0,
+            0.05898548143436036,
+            3
+          ],
+          "summed_primitive_shortfall": 0.05898548143436036
+        },
+        "source": "# ruff: noqa: F821\n# graph_headroom \u2014 evolution seed for the dev-continuum-* family.  Identity stays\n# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.\n#\n# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the\n# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so\n# seeding from one would start every arm outside the feasible region and turn the first\n# half of every campaign into a feasibility hunt rather than a search.  This seed is the\n# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one\n# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate \u2014 the\n# search starts feasible and has an explicit, large energy gap to close rather than\n# starting at the best baseline with nowhere to go.\nPOLICY_NAME: str = \"graph_headroom\"\nPOLICY_VERSION: str = \"1.0.0\"\n\n# EVOLVE-BLOCK-START\ndef resource_score(requested: int, capacity: int) -> int:\n    if capacity == 0 or requested > capacity:\n        return 0\n    return ((capacity - requested) * 100) // capacity\n\ndef score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:\n    cpu = resource_score(node.cpu_allocated + pod.cpu_request, node.cpu_capacity)\n    mem = resource_score(node.mem_allocated + pod.mem_request, node.mem_capacity)\n    return float((cpu + mem) // 2)\n\ndef propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:\n    out: list[Move] = []\n    return out\n# EVOLVE-BLOCK-END\n",
+        "source_sha256": "208ba3be72cdc37546294f5edf80bbaf041b7d0201af6a342d5374427310dd9b"
+      },
+      "completed_candidates": 52,
+      "full_records": 31,
+      "stage_exit": 0,
+      "terminal": {
+        "actual_microwork": 54800000,
+        "budget_carry_microwork": 1200000,
+        "candidate_safety_ceiling": 562,
+        "carried_incumbent_id": "W00:llm:00000047",
+        "completed_candidates": 52,
+        "confirmatory_postflight_receipt_required": true,
+        "effective_terminal_microwork": 56000000,
+        "proposal_engine": {
+          "engine": "openrouter",
+          "model_id": "deepseek/deepseek-v4.1-flash",
+          "transport": "durable-single-dispatch-v1",
+          "transport_config_sha256": "658220a0a361104f201e6c70b667341df942e4474d21aa5e668a2c827dabfe66",
+          "transport_source_sha256": "468752631496ef0a0c96b0b3dc05ffc97648d814d319a9b96a8c282d16889f56"
+        },
+        "proposal_engine_accounting": null,
+        "reason": "normalized-work-budget-exhausted",
+        "registered_max_microwork": 56000000,
+        "remaining_microwork": 1200000,
+        "run_purpose": "scientific-full-work",
+        "status": "complete",
+        "terminal_budget_policy": "carry-to-work-limit",
+        "unused_microwork_discarded": 0,
+        "usable_for_confirmatory_analysis": false
+      }
+    }
+  },
+  "index": 0,
+  "initialization_best": {
+    "candidate_id": "W00:gp:00000003",
+    "proposal_seq": 3,
+    "search_fitness": {
+      "direction": "lower-is-better",
+      "feasible": false,
+      "infeasibility_vector": [
+        0.01474637035859009,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "n_bundles": 3,
+      "n_instances": 4,
+      "normalized_energy": null,
+      "proposal_seq": 3,
+      "sort_key": [
+        1,
+        0.01474637035859009,
+        0.0,
+        0.0,
+        0.0,
+        0.05898548143436036,
+        3
+      ],
+      "summed_primitive_shortfall": 0.05898548143436036
+    },
+    "source": "# ruff: noqa: F821\n# graph_headroom \u2014 evolution seed for the dev-continuum-* family.  Identity stays\n# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.\n#\n# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the\n# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so\n# seeding from one would start every arm outside the feasible region and turn the first\n# half of every campaign into a feasibility hunt rather than a search.  This seed is the\n# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one\n# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate \u2014 the\n# search starts feasible and has an explicit, large energy gap to close rather than\n# starting at the best baseline with nowhere to go.\nPOLICY_NAME: str = \"graph_headroom\"\nPOLICY_VERSION: str = \"1.0.0\"\n\n# EVOLVE-BLOCK-START\ndef resource_score(requested: int, capacity: int) -> int:\n    if capacity == 0 or requested > capacity:\n        return 0\n    return ((capacity - requested) * 100) // capacity\n\ndef score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:\n    cpu = resource_score(node.cpu_allocated + pod.cpu_request, node.cpu_capacity)\n    mem = resource_score(node.mem_allocated + pod.mem_request, node.mem_capacity)\n    return float((cpu + mem) // 2)\n\ndef propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:\n    out: list[Move] = []\n    return out\n# EVOLVE-BLOCK-END\n",
+    "source_sha256": "208ba3be72cdc37546294f5edf80bbaf041b7d0201af6a342d5374427310dd9b"
+  },
+  "rule": "CandidateFitness.sort_key over completed L2 records; proposal sequence tie-break; no final-grid information",
+  "sealed_at": "2026-10-05T15:36:24.448827+00:00",
+  "study": "W",
+  "zeroshot": {
+    "champion": {
+      "candidate_id": "zeroshot-2",
+      "proposal_seq": 1002,
+      "search_fitness": {
+        "direction": "lower-is-better",
+        "feasible": true,
+        "infeasibility_vector": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "n_bundles": 3,
+        "n_instances": 4,
+        "normalized_energy": 1.3818086216959264,
+        "proposal_seq": 1002,
+        "sort_key": [
+          0,
+          1.3818086216959264,
+          1002
+        ],
+        "summed_primitive_shortfall": 0.0
+      },
+      "source": "# ruff: noqa: F821\n# graph_headroom \u2014 evolution seed for the dev-continuum-* family.  Identity stays\n# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.\n#\n# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the\n# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so\n# seeding from one would start every arm outside the feasible region and turn the first\n# half of every campaign into a feasibility hunt rather than a search.  This seed is the\n# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one\n# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate \u2014 the\n# search starts feasible and has an explicit, large energy gap to close rather than\n# starting at the best baseline with nowhere to go.\nPOLICY_NAME: str = \"graph_headroom\"\nPOLICY_VERSION: str = \"1.0.0\"\n\n# EVOLVE-BLOCK-START\ndef contains(lst: list[int], value: int) -> bool:\n    for i in range(len(lst)):\n        if lst[i] == value:\n            return True\n    return False\n\ndef has_headroom(pod: Pod, node: NodeState) -> bool:\n    cpu_cap = float(max(node.cpu_capacity, 1))\n    mem_cap = float(max(node.mem_capacity, 1))\n    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap\n    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap\n    peak = max(cpu_after, mem_after)\n    return peak < 0.65\n\ndef node_score(pod: Pod, node: NodeState, pods: list[Pod], graph: CallGraphCtx) -> float:\n    if node.suspended:\n        return -1000000.0\n    cpu_cap = float(max(node.cpu_capacity, 1))\n    mem_cap = float(max(node.mem_capacity, 1))\n    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap\n    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap\n    peak = max(cpu_after, mem_after)\n    if peak > 1.0:\n        return -1000000.0\n    headroom = 1.0 - peak\n    headroom_score = headroom * headroom\n    weighted = 0.0\n    weight = 0.0\n    max_latency = 0.0\n    edges = len(graph.src)\n    for e in range(edges):\n        source = graph.src[e]\n        destination = graph.dst[e]\n        other = -1\n        if source == pod.id:\n            other = destination\n        if destination == pod.id:\n            other = source\n        if other >= 0 and other != pod.id:\n            neighbor = pods[other]\n            if neighbor.current_node >= 0:\n                rate = graph.rate[e]\n                latency = node.latency_to_ms[neighbor.current_node]\n                weighted = weighted + rate * latency\n                weight = weight + rate\n                if latency > max_latency:\n                    max_latency = latency\n    proximity = 0.5\n    if weight > 0.0:\n        mean = weighted / weight\n        proximity = 1.0 - min(mean / 45.0, 1.0)\n        timeout_penalty = 1.0 - min(max_latency / 120.0, 1.0)\n        proximity = proximity * 0.7 + timeout_penalty * 0.3\n    efficiency = 1.0 - min(node.power_idle_w / 120.0, 1.0)\n    return headroom_score * 0.65 + proximity * 0.25 + efficiency * 0.10\n\ndef score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:\n    return node_score(pod, node, ctx.pods, ctx.graph)\n\ndef propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:\n    out: list[Move] = []\n    if budget <= 0:\n        return out\n    moved = 0\n    used_targets: list[int] = []\n    moved_pods: list[int] = []\n    edges = len(graph.src)\n    for e in range(edges):\n        source_pod = state.pods[graph.src[e]]\n        dest_pod = state.pods[graph.dst[e]]\n        if moved < budget and source_pod.current_node >= 0 and dest_pod.current_node >= 0 and source_pod.current_node != dest_pod.current_node:\n            source_node = state.nodes[source_pod.current_node]\n            dest_node = state.nodes[dest_pod.current_node]\n            source_movable = not source_pod.stateful and not source_pod.has_pdb and not contains(moved_pods, source_pod.id)\n            target_ok = not dest_node.suspended and not contains(used_targets, dest_pod.current_node)\n            if source_movable and target_ok:\n                q_current = node_score(source_pod, source_node, state.pods, graph)\n                q_target = node_score(source_pod, dest_node, state.pods, graph)\n                if q_target > q_current + 0.01 and has_headroom(source_pod, dest_node):\n                    out.append(move_pod(source_pod.id, dest_pod.current_node))\n                    moved = moved + 1\n                    used_targets.append(dest_pod.current_node)\n                    moved_pods.append(source_pod.id)\n            dest_movable = not dest_pod.stateful and not dest_pod.has_pdb and not contains(moved_pods, dest_pod.id)\n            target_ok_d = not source_node.suspended and not contains(used_targets, source_pod.current_node)\n            if moved < budget and dest_movable and target_ok_d:\n                q_current_d = node_score(dest_pod, dest_node, state.pods, graph)\n                q_target_d = node_score(dest_pod, source_node, state.pods, graph)\n                if q_target_d > q_current_d + 0.01 and has_headroom(dest_pod, source_node):\n                    out.append(move_pod(dest_pod.id, source_pod.current_node))\n                    moved = moved + 1\n                    used_targets.append(source_pod.current_node)\n                    moved_pods.append(dest_pod.id)\n    return out\n# EVOLVE-BLOCK-END\n",
+      "source_sha256": "e72f2501d54bf5fd83f314aef6d729797a8dc258ec7fd8e52e18b03b5dba529f"
+    },
+    "promoted_to_l2": 9,
+    "proposals": 20,
+    "rule": "CandidateFitness.sort_key over initialization L2 records and zero-shot L2 records; proposal sequence tie-break; no final-grid information",
+    "sealed_at": "2026-10-05T15:06:37.168215+00:00",
+    "spent_microusd": 159292,
+    "stop": "zero-shot root API ceiling reached",
+    "valid": 19
+  }
+}

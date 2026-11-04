@@ -1,0 +1,99 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def resource_score(requested: int, capacity: int) -> int:
+    if capacity == 0:
+        return 0
+    if requested > capacity:
+        return 0
+    return ((capacity - requested) * 100) // capacity
+
+def node_power(node: NodeState) -> float:
+    cpu_util = 0.0
+    mem_util = 0.0
+    if node.cpu_capacity > 0:
+        cpu_util = float(node.cpu_allocated) / float(node.cpu_capacity)
+    if node.mem_capacity > 0:
+        mem_util = float(node.mem_allocated) / float(node.mem_capacity)
+    util = (cpu_util + mem_util) / 2.0
+    power = node.power_idle_w + (node.power_max_w - node.power_idle_w) * util
+    return power
+
+def node_avg_latency(node: NodeState) -> float:
+    lat_sum = 0.0
+    count = 0
+    for lat in node.latency_to_ms:
+        lat_sum = lat_sum + lat
+        count = count + 1
+    if count == 0:
+        return 0.0
+    return lat_sum / float(count)
+
+def contains(lst: list[int], val: int) -> int:
+    for x in lst:
+        if x == val:
+            return 1
+    return 0
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    cpu_h = resource_score(node.cpu_allocated + pod.cpu_request, node.cpu_capacity)
+    mem_h = resource_score(node.mem_allocated + pod.mem_request, node.mem_capacity)
+    headroom = float((cpu_h + mem_h) // 2) / 100.0
+    avg_lat = node_avg_latency(node)
+    latency_score = 1.0 / (1.0 + avg_lat)
+    power = node_power(node)
+    suspend_pen = 0.0
+    if node.suspended:
+        suspend_pen = 200.0
+    score_val = headroom * 200.0 + latency_score * 100.0 - power * 0.5 - suspend_pen * 0.2
+    return score_val
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    chosen: list[int] = []
+    for pod in state.pods:
+        if budget > 0 and not pod.stateful and not pod.has_pdb:
+            if pod.current_node >= 0:
+                current_power = 0.0
+                current_headroom = 0.0
+                current_avg_lat = 0.0
+                for n in state.nodes:
+                    if n.id == pod.current_node:
+                        current_power = node_power(n)
+                        cpu_h = resource_score(n.cpu_allocated, n.cpu_capacity)
+                        mem_h = resource_score(n.mem_allocated, n.mem_capacity)
+                        current_headroom = float((cpu_h + mem_h) // 2) / 100.0
+                        current_avg_lat = node_avg_latency(n)
+                best_node_id = -1
+                best_power = current_power
+                best_headroom = current_headroom
+                for n in state.nodes:
+                    if n.id != pod.current_node and not n.suspended and n.cpu_capacity >= n.cpu_allocated + pod.cpu_request and n.mem_capacity >= n.mem_allocated + pod.mem_request:
+                        cpu_h = resource_score(n.cpu_allocated + pod.cpu_request, n.cpu_capacity)
+                        mem_h = resource_score(n.mem_allocated + pod.mem_request, n.mem_capacity)
+                        target_headroom = float((cpu_h + mem_h) // 2) / 100.0
+                        target_power = node_power(n)
+                        target_avg_lat = node_avg_latency(n)
+                        if target_power < current_power * 0.85 and target_headroom > 0.3 and target_power < best_power and target_avg_lat < current_avg_lat * 1.2:
+                            best_power = target_power
+                            best_node_id = n.id
+                            best_headroom = target_headroom
+                if best_node_id >= 0 and contains(chosen, best_node_id) == 0:
+                    out.append(move_pod(pod.id, best_node_id))
+                    chosen.append(best_node_id)
+                    budget = budget - 1
+    return out
+# EVOLVE-BLOCK-END

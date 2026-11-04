@@ -1,0 +1,220 @@
+{
+ "schema": "pinned-sources-v1",
+ "note": "Pinned non-SPECpower sources (TODO 3.1): peer-reviewed ARM SBC power characterizations, published server off/on transition measurements (Orgerie et al. lineage), and CCF/allocation coefficients. Every number carries a provenance record; entries not verified against their source at pinning time must carry status 'PROVISIONAL — needs verification' and are excluded from default bundle sets. Swept ranges are pre-registered sensitivity sweeps constructed from published figures — never invented confidence intervals.",
+ "accessed": "2026-07-16",
+ "arm_sbc": [
+  {
+   "machine_id": "armsbc-rpi3b-cloutier2016",
+   "board": "Raspberry Pi Model 3B",
+   "cpu": "Broadcom BCM2837, 4x ARM Cortex-A53 @ 1.2 GHz",
+   "cores": 4,
+   "load_metric": "sustained High-Performance Linpack run (average power, N=10000); consumed as the 100%-load point of the joint curve",
+   "load_points": [
+    [
+     1.0,
+     4.4
+    ]
+   ],
+   "active_idle_w": 1.8,
+   "peak_throughput_ops": 3.7,
+   "provenance": {
+    "source_name": "Cloutier, Paradis & Weaver, 'A Raspberry Pi Cluster Instrumented for Fine-Grained Power Measurement', Electronics 5(4):61, MDPI, 2016",
+    "url": "https://mdpi-res.com/d_attachment/electronics/electronics-05-00061/article_deploy/electronics-05-00061.pdf",
+    "doi": "10.3390/electronics5040061",
+    "version_or_date_accessed": "2026-07-16",
+    "field_transcribed": "Table 2 row 'Raspberry Pi Model 3B': N=10,000, GFLOPS 3.7 (*footnote: 'With extra cooling, the Pi3 can get 6.4 GFLOPS' - the stock-cooling 3.7 figure is pinned), Idle Power 1.8 W, AvgLoad Power 4.4 W (HPL); Table 1: Cortex A53 x4 @ 1.2 GHz. Measurement: WattsUpPro meter, 1 S/s, no peripherals attached; HPL is CPU double-precision (no GPU/DSP acceleration, stated in section 2.1.2).",
+    "status": "VERIFIED",
+    "verification_method": "publisher PDF fetched 2026-07-16; table row independently re-extracted from the PDF text ('RaspberryPiModel3B 10,000 3.7* 1.8 4.4 0.844 106') in a second pass; re-fetched and Table 2 row + asterisk footnote re-verified 2026-07-18",
+    "notes": "Idle + full-HPL point only; no intermediate load levels published for this board."
+   },
+   "benchmark_domain": "hpl-gflops-cpu-dp"
+  },
+  {
+   "machine_id": "armsbc-jetsontx1-cloutier2016",
+   "board": "NVIDIA Jetson TX-1",
+   "cpu": "NVIDIA Tegra X1, 4x ARM Cortex-A57 @ 1.9 GHz",
+   "cores": 4,
+   "load_metric": "sustained High-Performance Linpack run (average power, N=20000); consumed as the 100%-load point of the joint curve",
+   "load_points": [
+    [
+     1.0,
+     13.4
+    ]
+   ],
+   "active_idle_w": 2.1,
+   "peak_throughput_ops": 16.0,
+   "provenance": {
+    "source_name": "Cloutier, Paradis & Weaver, 'A Raspberry Pi Cluster Instrumented for Fine-Grained Power Measurement', Electronics 5(4):61, MDPI, 2016",
+    "url": "https://mdpi-res.com/d_attachment/electronics/electronics-05-00061/article_deploy/electronics-05-00061.pdf",
+    "doi": "10.3390/electronics5040061",
+    "version_or_date_accessed": "2026-07-16",
+    "field_transcribed": "Table 2 row 'Jetson TX-1': N=20,000, GFLOPS 16.0, Idle Power 2.1 W, AvgLoad Power 13.4 W (HPL); Table 1: Cortex A57 x4 @ 1.9 GHz. Measurement: WattsUpPro meter, 1 S/s, no peripherals attached; HPL is CPU double-precision (HPL_cuda crashed, so no GPU results - stated in section 2.1.2).",
+    "status": "VERIFIED",
+    "verification_method": "publisher PDF fetched 2026-07-16; table row independently re-extracted from the PDF text ('JetsonTX-1 20,000 16.0 2.1 13.4 1.20 26.7') in a second pass; re-fetched and Table 2 row re-verified 2026-07-18",
+    "notes": "Same source paper as the RPi 3B entry (shared measurement lineage, stated per plan §4.1); different physical machine and CPU family."
+   },
+   "benchmark_domain": "hpl-gflops-cpu-dp"
+  },
+  {
+   "machine_id": "armsbc-rpib-kaup2014",
+   "board": "Raspberry Pi Model B",
+   "cpu": "Broadcom BCM2835, 1x ARM1176JZF-S @ 700 MHz",
+   "cores": 1,
+   "load_metric": "CPU utilization u in [0,1] per the published fitted model P(u) = 1.5778 W + 0.181*u W (loaded endpoint computed from the published equation at u=1)",
+   "load_points": [
+    [
+     1.0,
+     1.7588
+    ]
+   ],
+   "active_idle_w": 1.5778,
+   "peak_throughput_ops": null,
+   "provenance": {
+    "source_name": "Kaup, Gottschling & Hausheer, 'PowerPi: Measuring and Modeling the Power Consumption of the Raspberry Pi', IEEE LCN 2014",
+    "url": "https://ieeexplore.ieee.org/ielx7/6916486/6925725/06925777.pdf",
+    "doi": "10.1109/LCN.2014.6925777",
+    "version_or_date_accessed": "2026-07-16",
+    "field_transcribed": "Table I: Pidle = 1.5778 W (RMSE 15 mW); published model 'PPi,CPU(u) = 1.5778W + 0.181 * u * W' (CPU measured 10%-100% in 10% steps). Shunt measurement on the 5 V line, 1 kS/s, max error 2.47%.",
+    "status": "VERIFIED",
+    "verification_method": "IEEE open-access PDF fetched 2026-07-16 (located via Unpaywall for the DOI); coefficients quoted verbatim from the paper text",
+    "notes": "The 1.0-load point (1.7588 W) is arithmetic on the two published model coefficients, stated in load_metric. Not in any default bundle set (single-core 2014-era board kept as an extra verified source for sensitivity spreads)."
+   },
+   "benchmark_domain": null
+  }
+ ],
+ "transitions": [
+  {
+   "entry_id": "transition-taurus-ijhpca2018",
+   "device_described": "Dell PowerEdge R720 (Grid'5000 Lyon 'Taurus' node; 2x Intel Xeon E5-2630, 32 GB)",
+   "suspend_s": 15.0,
+   "suspend_energy_j": 1655.0,
+   "wake_s": 182.0,
+   "wake_energy_j": 23683.0,
+   "suspended_power_w": 8.0,
+   "derivation": "Modeled 'suspend/wake' = ACPI S5 shutdown/boot exactly as measured (the cited lineage reports S3 suspend-to-RAM unsupported on these servers: Rais et al., CCPE 2018, DOI 10.1002/cpe.4471). suspend := On->Off (T=15 s, E=1655 J), wake := Off->On (T=182 s, E=23683 J), suspended draw := Poff = 8 W. Published transition-energy totals are used directly as the simulator's transition pulses; the simulator additionally meters idle-level draw during the transition window, so the modeled transition cost upper-bounds the published measurement by at most Pidle*T (conservative against suspension churn).",
+   "provenance": {
+    "source_name": "Benoit, Lefevre, Orgerie & Rais, 'Reducing the energy consumption of large scale computing systems through combined shutdown policies with multiple constraints', IJHPCA 32(1):176-188, 2018",
+    "url": "https://perso.ens-lyon.fr/laurent.lefevre/pdf/IJHPCA2018_Benoit_Lefevre_Orgerie_Rais.pdf",
+    "doi": "10.1177/1094342017714530",
+    "version_or_date_accessed": "2026-07-16",
+    "field_transcribed": "Table 3 ('Calibration node characteristics and energy parameters for On->Off and Off->On sequences (average on 50 experimental measurements)'): EOffOn 23683 J, TOffOn 182 s, EOnOff 1655 J, TOnOff 15 s, Pidle 91 W, Poff 8 W.",
+    "status": "VERIFIED",
+    "verification_method": "author-hosted PDF fetched 2026-07-16; the values 23683, 1655, 182, 286.29 independently re-extracted from the PDF text in a second pass; HAL bibliographic record confirmed via api.archives-ouvertes.fr (hal-01557025)",
+    "notes": "Transition measurements are class-level published data from a different machine than the SPECpower power-curve machines (no source publishes both); bundles state this composition explicitly (plan section 4.1: tuple = power curve + capacity; transition table attaches per bundle)."
+   }
+  },
+  {
+   "entry_id": "transition-paravance-ica3pp2016",
+   "device_described": "Dell PowerEdge R630 (Grid'5000 'Paravance' node; Intel Xeon E5-2630v3)",
+   "suspend_s": 7.5,
+   "suspend_energy_j": 2000.0,
+   "wake_s": 167.5,
+   "wake_energy_j": 19893.0,
+   "suspended_power_w": 4.5,
+   "derivation": "Modeled 'suspend/wake' = ACPI S5 regular shutdown/boot exactly as measured ('values for regular shutdown, S5 mode (average of 100 run)'). suspend := On->Off (T=7.5 s, E=2000 J), wake := Off->On (T=167.5 s, E=19893 J), suspended draw := Poff = 4.5 W. Same pulse semantics as transition-taurus-ijhpca2018.",
+   "provenance": {
+    "source_name": "Rais, Orgerie & Quinson, 'Impact of Shutdown Techniques for Energy-Efficient Cloud Data Centers', ICA3PP 2016 (Springer), pp. 203-210",
+    "url": "http://web.archive.org/web/20231225190419/https://inria.hal.science/hal-01362530/file/paper.pdf",
+    "doi": "10.1007/978-3-319-49583-5_15",
+    "version_or_date_accessed": "2026-07-16 (Wayback snapshot 2023-12-25 of the HAL deposit)",
+    "field_transcribed": "Table 1 ('average on 100 experimental measurements'), Paravance column: EOffOn 19,893 J, EOnOff 2,000 J, TOffOn 167.5 s, TOnOff 7.5 s, Pidle 150 W, Poff 4.5 W; hardware row: Dell PowerEdge R630, Xeon E5-2630v3.",
+    "status": "VERIFIED",
+    "verification_method": "Wayback-archived HAL PDF fetched 2026-07-16; the values 19,893 / 2,000 / 167.5 / 7.5 / 4.5 and 'DellPowerEdgeR630' independently re-extracted from the PDF text in a second pass; HAL record hal-01362530 confirmed via api.archives-ouvertes.fr",
+    "notes": "The CCPE 2018 journal version republishes this table with different On->Off values (616-1115 J, 6.1-13 s); the conference values are pinned here and the divergence is recorded (both are published; the pinned citation governs)."
+   }
+  }
+ ],
+ "cloud_allocation": [
+  {
+   "entry_id": "ccf-aws-cpu",
+   "min_w_per_vcpu": 0.74,
+   "max_w_per_vcpu": 3.5,
+   "assumed_allocation_utilization": 0.5,
+   "swept_range_w_per_vcpu": [
+    0.74,
+    3.5
+   ],
+   "source_publishes_range": true,
+   "provenance": {
+    "source_name": "Cloud Carbon Footprint (Thoughtworks) methodology, compute coefficients (SPECpower-derived, Mytton ccf-coefficients lineage)",
+    "url": "https://www.cloudcarbonfootprint.org/docs/methodology/",
+    "doi": null,
+    "version_or_date_accessed": "2026-07-16 (page carries no version number); re-fetched 2026-07-18 with the raw HTML retained in-repo",
+    "field_transcribed": "'AWS: Average Min Watts: 0.74 Average Max Watts: 3.5' (W per vCPU at 0%/100% utilization; 'Average Watts = Min Watts + Avg vCPU Utilization * (Max Watts - Min Watts)'); allocation utilization 0.5 from 'Average CPU Utilization for hyperscale data centers: 50%' (2016 U.S. Data Center Energy Usage Report projection, as cited by CCF).",
+    "status": "VERIFIED",
+    "verification_method": "methodology page fetched via curl 2026-07-16 and quoted strings re-grepped in a second pass; CORRECTION 2026-07-18: the 2026-07-16 fetch's raw HTML was not committed to the repository despite the original record's claim - the page was re-fetched 2026-07-18, every quoted value re-verified verbatim against it, and the artifact retained at sim/energy/data/artifacts/ccf-methodology-2026-07-18.html",
+    "notes": "Used as what it is: a point-estimate allocation model (plan section 4.1). The swept range is the published min/max-watts pair itself — published endpoints, not a confidence interval. Teads lineage on this page covers GPU/embodied figures, not these CPU coefficients (recorded to avoid miscitation).",
+    "content_sha256": "a63293dc7e11bdaaa309434953509e2522765758ab7f62d4f757ed0dae420e72",
+    "artifact_path": "artifacts/ccf-methodology-2026-07-18.html"
+   }
+  },
+  {
+   "entry_id": "ccf-gcp-cpu",
+   "min_w_per_vcpu": 0.71,
+   "max_w_per_vcpu": 4.26,
+   "assumed_allocation_utilization": 0.5,
+   "swept_range_w_per_vcpu": [
+    0.71,
+    4.26
+   ],
+   "source_publishes_range": true,
+   "provenance": {
+    "source_name": "Cloud Carbon Footprint (Thoughtworks) methodology, compute coefficients (SPECpower-derived, Mytton ccf-coefficients lineage)",
+    "url": "https://www.cloudcarbonfootprint.org/docs/methodology/",
+    "doi": null,
+    "version_or_date_accessed": "2026-07-16 (page carries no version number); re-fetched 2026-07-18 with the raw HTML retained in-repo",
+    "field_transcribed": "'GCP: Median Min Watts: 0.71 Median Max Watts: 4.26' (W per vCPU at 0%/100% utilization); allocation utilization 0.5 as for ccf-aws-cpu.",
+    "status": "VERIFIED",
+    "verification_method": "methodology page fetched via curl 2026-07-16 and quoted strings re-grepped in a second pass; CORRECTION 2026-07-18: the 2026-07-16 fetch's raw HTML was not committed to the repository despite the original record's claim - the page was re-fetched 2026-07-18, every quoted value re-verified verbatim against it, and the artifact retained at sim/energy/data/artifacts/ccf-methodology-2026-07-18.html",
+    "notes": "Held-out allocation entry (different published coefficient set than ccf-aws-cpu; shared CCF page lineage is stated — plan section 4.1 acknowledges families share data lineages).",
+    "content_sha256": "a63293dc7e11bdaaa309434953509e2522765758ab7f62d4f757ed0dae420e72",
+    "artifact_path": "artifacts/ccf-methodology-2026-07-18.html"
+   }
+  }
+ ],
+ "boavizta_scope_deviation": "R1-4/R2-7 documented scope deviation, no coefficient entry pinned: Boavizta (BoaviztAPI v2.3.0, queried 2026-07-18) publishes an instance-specific consumption-profile impact model (nonlinear host power from CPU profiles, allocated by vCPU and memory ratios) — not a scalar per-vCPU-hour coefficient, and not the linear min/max-utilization interpolation this schema's cloud_allocation entries model (CCF's usage). Pinning a scalar here would model Boavizta through a functional form it does not publish. The raw API response for AWS m5.xlarge is retained at artifacts/boaviztapi-aws-m5xlarge-2026-07-18.json (sha256 5c09fab320a3226d18c9db6bfb567307e126fc54056144d2fdb95d076275907b) as evidence for the P2 bundle-list decision on whether a Boavizta consumption-profile bundle family (a separate structural family with its own model code) is added.",
+ "network_allocation": [
+  {
+   "entry_id": "ccf-network",
+   "kwh_per_gb": 0.001,
+   "swept_range_kwh_per_gb": [
+    0.001,
+    0.06
+   ],
+   "source_publishes_range": false,
+   "provenance": {
+    "source_name": "Cloud Carbon Footprint (Thoughtworks) methodology, networking coefficient",
+    "url": "https://www.cloudcarbonfootprint.org/docs/methodology/",
+    "doi": null,
+    "version_or_date_accessed": "2026-07-16 (page carries no version number); re-fetched 2026-07-18 with the raw HTML retained in-repo",
+    "field_transcribed": "'we have decided to use the smallest coefficient available to date: 0.001 kWh/Gb' and Appendix I 'Networking Kilowatt Hours / Gigabyte: 0.001'. Unit note: the prose writes 'kWh/Gb' but Appendix I and the studies table are per gigabyte; per-GB is pinned.",
+    "status": "VERIFIED",
+    "verification_method": "methodology page fetched via curl 2026-07-16 and quoted strings re-grepped in a second pass; CORRECTION 2026-07-18: the 2026-07-16 fetch's raw HTML was not committed to the repository despite the original record's claim - the page was re-fetched 2026-07-18, every quoted value re-verified verbatim against it, and the artifact retained at sim/energy/data/artifacts/ccf-methodology-2026-07-18.html",
+    "notes": "CCF publishes only this point estimate. The swept range [0.001, 0.06] kWh/GB is a pre-registered sweep spanning to the Aslan et al. end-to-end estimate as listed in CCF's own Appendix IV studies table ('Aslan et al end-to-end 2015 0.06') — published alternative estimates, not a confidence interval. Scope per CCF: inter-data-center transfer.",
+    "content_sha256": "a63293dc7e11bdaaa309434953509e2522765758ab7f62d4f757ed0dae420e72",
+    "artifact_path": "artifacts/ccf-methodology-2026-07-18.html"
+   },
+   "path_scope_published": "efficient inter-data-center transfer (CCF methodology motivates the 0.001 kWh/GB figure as the smallest available estimate, for data-center-to-data-center paths)"
+  },
+  {
+   "entry_id": "aslan2017-network",
+   "kwh_per_gb": 0.06,
+   "swept_range_kwh_per_gb": [
+    0.004,
+    0.14
+   ],
+   "source_publishes_range": false,
+   "provenance": {
+    "source_name": "Aslan, Mayers, Koomey & France, 'Electricity Intensity of Internet Data Transmission: Untangling the Estimates', Journal of Industrial Ecology",
+    "url": "https://api.semanticscholar.org/graph/v1/paper/DOI:10.1111/jiec.12630?fields=abstract",
+    "doi": "10.1111/jiec.12630",
+    "version_or_date_accessed": "2026-07-16 (Semantic Scholar API record; Wiley full text paywalled); re-verified 2026-07-18",
+    "field_transcribed": "Abstract: 'This article derives criteria to identify accurate estimates over time and provides a new estimate of 0.06 kWh/GB for 2015' (core + fixed-line access networks).",
+    "status": "VERIFIED",
+    "verification_method": "DOI record + abstract fetched from the Semantic Scholar Graph API; CORRECTION 2026-07-18: the originally recorded URL lacked the '?fields=abstract' parameter the Graph API requires to return the abstract - the corrected request was re-issued 2026-07-18 and returns the abstract containing verbatim 'provides a new estimate of 0.06 kWh/GB for 2015' (core + fixed-line access networks)",
+    "notes": "Held-out network entry (different published coefficient than ccf-network). The swept range [0.004, 0.14] kWh/GB spans the published study estimates listed in CCF Appendix IV ('Aslan et al Internet core 2015 0.004'; 'Krug end-to-end 2012 0.14') — published figures, not a confidence interval."
+   },
+   "path_scope_published": "Internet core plus fixed-line access networks, end-to-end 2015 estimate (excludes data centers themselves and customer premises equipment per the study boundary)"
+  }
+ ]
+}

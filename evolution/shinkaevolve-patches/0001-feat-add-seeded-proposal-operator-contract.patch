@@ -1,0 +1,1487 @@
+diff --git a/shinka/core/__init__.py b/shinka/core/__init__.py
+index 40264f5..c55c9c9 100644
+--- a/shinka/core/__init__.py
++++ b/shinka/core/__init__.py
+@@ -10,6 +10,7 @@ from .prompt_evolver import (
+     SystemPromptSampler,
+     AsyncSystemPromptEvolver,
+ )
++from .proposal_operator import ProposalOffspring, ProposalOperator
+ 
+ __all__ = [
+     "PromptSampler",
+@@ -22,4 +23,6 @@ __all__ = [
+     "SystemPromptEvolver",
+     "SystemPromptSampler",
+     "AsyncSystemPromptEvolver",
++    "ProposalOffspring",
++    "ProposalOperator",
+ ]
+diff --git a/shinka/core/async_runner.py b/shinka/core/async_runner.py
+index 8c4c3c4..2ca53b6 100644
+--- a/shinka/core/async_runner.py
++++ b/shinka/core/async_runner.py
+@@ -5,7 +5,9 @@ Provides fully asynchronous evolution pipeline with concurrent LLM sampling.
+ 
+ import json
+ import asyncio
++import difflib
+ import logging
++import random
+ import shutil
+ import time
+ import uuid
+@@ -60,6 +62,11 @@ from shinka.core.prompt_evolver import (
+     AsyncSystemPromptEvolver,
+ )
+ from shinka.core.runtime_slots import LogicalSlotPool
++from shinka.core.proposal_operator import (
++    ProposalOperator,
++    derive_operator_seed,
++    invoke_proposal_operator,
++)
+ from shinka.logo import BannerStyle, get_logo_ascii, print_gradient_logo
+ from shinka.model_availability import validate_model_env_access
+ from shinka.utils import (
+@@ -236,6 +243,8 @@ class ShinkaEvolveRunner:
+         debug: bool = False,
+         init_program_str: Optional[str] = None,
+         evaluate_str: Optional[str] = None,
++        proposal_operator: Optional[ProposalOperator] = None,
++        proposal_root_seed: Optional[int] = None,
+     ):
+         """Initialize async evolution runner.
+ 
+@@ -255,7 +264,20 @@ class ShinkaEvolveRunner:
+             evaluate_str: Optional string content for evaluate script
+                 (will be saved to results dir and path updated in job_config)
+         """
+-        _validate_evo_config_model_env_access(evo_config)
++        requires_proposal_seed = proposal_operator is not None or "numeric" in set(
++            evo_config.patch_types
++        )
++        if proposal_operator is None:
++            _validate_evo_config_model_env_access(evo_config)
++        if requires_proposal_seed and (
++            not isinstance(proposal_root_seed, int)
++            or isinstance(proposal_root_seed, bool)
++            or proposal_root_seed < 0
++        ):
++            raise ValueError(
++                "proposal_root_seed must be an explicit non-negative int when a "
++                "ProposalOperator or numeric patch is configured"
++            )
+ 
+         self.verbose = verbose
+         # Setup results directory first
+@@ -270,6 +292,14 @@ class ShinkaEvolveRunner:
+         self.db_config = db_config
+         self.banner_style = banner_style
+         self.enable_deadlock_debugging = debug
++        self.proposal_operator = proposal_operator
++        self.proposal_root_seed = proposal_root_seed
++        self.proposal_accounting = {
++            "attempts": 0,
++            "invalid_offspring": 0,
++            "retries": 0,
++            "repair_calls": 0,
++        }
+         log_filename = f"{self.results_dir}/evolution_run.log"
+ 
+         if self.verbose:
+@@ -362,7 +392,7 @@ class ShinkaEvolveRunner:
+         self.console = RichTeeConsole(Console(), Path(log_filename))
+ 
+         # Initialize LLM selection strategy
+-        if evo_config.llm_dynamic_selection is None:
++        if proposal_operator is not None or evo_config.llm_dynamic_selection is None:
+             self.llm_selection = None
+         elif isinstance(evo_config.llm_dynamic_selection, BanditBase):
+             self.llm_selection = evo_config.llm_dynamic_selection
+@@ -392,13 +422,15 @@ class ShinkaEvolveRunner:
+         self.async_db = None
+ 
+         # LLM clients
+-        self.llm = AsyncLLMClient(
+-            model_names=evo_config.llm_models,
+-            **_llm_kwargs_with_headless_work_dir(
+-                evo_config.llm_kwargs,
+-                Path(self.results_dir),
+-            ),
+-        )
++        self.llm = None
++        if proposal_operator is None:
++            self.llm = AsyncLLMClient(
++                model_names=evo_config.llm_models,
++                **_llm_kwargs_with_headless_work_dir(
++                    evo_config.llm_kwargs,
++                    Path(self.results_dir),
++                ),
++            )
+ 
+         # Embedding client (use async version for async runner)
+         if evo_config.embedding_model:
+@@ -881,9 +913,7 @@ class ShinkaEvolveRunner:
+         buffer_max = max(0, getattr(self.evo_config, "proposal_buffer_max", 0))
+         hard_cap = getattr(self.evo_config, "proposal_target_hard_cap", None)
+         if hard_cap is not None and hard_cap < base_target:
+-            if not getattr(
+-                self, "_warned_invalid_proposal_target_hard_cap", False
+-            ):
++            if not getattr(self, "_warned_invalid_proposal_target_hard_cap", False):
+                 logger.warning(
+                     "Ignoring proposal_target_hard_cap=%s because it is below "
+                     "max_evaluation_jobs=%s and would disable oversubscription.",
+@@ -1372,13 +1402,17 @@ class ShinkaEvolveRunner:
+             name="prompt_percentile_recompute",
+         )
+ 
+-    async def _recompute_prompt_percentiles_async(self, recompute_interval: int) -> None:
++    async def _recompute_prompt_percentiles_async(
++        self, recompute_interval: int
++    ) -> None:
+         """Refresh prompt fitness percentiles without blocking side-effect workers."""
+         try:
+             loop = asyncio.get_event_loop()
+             if hasattr(self.db, "config"):
+ 
+-                def load_program_scores_thread_safe() -> Tuple[List[float], Dict[str, float]]:
++                def load_program_scores_thread_safe() -> Tuple[
++                    List[float], Dict[str, float]
++                ]:
+                     thread_db = None
+                     try:
+                         thread_db = ProgramDatabase(self.db.config, read_only=True)
+@@ -1423,9 +1457,7 @@ class ShinkaEvolveRunner:
+                 len(all_correct_scores),
+             )
+         except Exception as recompute_err:
+-            logger.warning(
+-                "Failed to recompute prompt percentiles: %s", recompute_err
+-            )
++            logger.warning("Failed to recompute prompt percentiles: %s", recompute_err)
+         finally:
+             rerun_requested = self._prompt_percentile_recompute_pending
+             self._prompt_percentile_recompute_pending = False
+@@ -2001,9 +2033,7 @@ class ShinkaEvolveRunner:
+                                         f"{job.generation} - {status_results[i]}"
+                                     )
+                                 else:
+-                                    status_display.append(
+-                                        f"{job.generation} - unknown"
+-                                    )
++                                    status_display.append(f"{job.generation} - unknown")
+ 
+                             logger.debug(
+                                 f"Job statuses ({len(monitored_jobs)}): gen [{', '.join(status_display)}]"
+@@ -2368,7 +2398,9 @@ class ShinkaEvolveRunner:
+                     and self._get_in_flight_work_count() == 0
+                     and self.completed_generations < self.evo_config.num_generations
+                 ):
+-                    missing_generations = await self._get_missing_persisted_generations()
++                    missing_generations = (
++                        await self._get_missing_persisted_generations()
++                    )
+                     await self._record_generation_event(
+                         generation=self.next_generation_to_submit,
+                         status="stopped_generation_budget_exhausted",
+@@ -2634,6 +2666,90 @@ class ShinkaEvolveRunner:
+                 sampling_worker_id=sampling_worker_id,
+             )
+ 
++    async def _run_controlled_operator_async(
++        self,
++        *,
++        parent_program: Program,
++        inspirations: tuple[Program, ...],
++        generation: int,
++        novelty_attempt: int,
++        resample_attempt: int,
++        exec_fname: str,
++        needs_fix: bool,
++    ) -> Tuple[Optional[str], Dict[str, Any], bool]:
++        """Invoke an injected operator while the runner owns the shared pipeline."""
++
++        if self.proposal_operator is None or self.proposal_root_seed is None:
++            raise RuntimeError("controlled proposal operator is not configured")
++
++        self.proposal_accounting["attempts"] += 1
++        if novelty_attempt > 1 or resample_attempt > 1:
++            self.proposal_accounting["retries"] += 1
++        if needs_fix:
++            self.proposal_accounting["repair_calls"] += 1
++
++        operator_seed = derive_operator_seed(
++            self.proposal_root_seed,
++            generation,
++            novelty_attempt,
++            resample_attempt,
++        )
++        rng = random.Random(operator_seed)
++        base_metadata: Dict[str, Any] = {
++            "api_costs": 0.0,
++            "patch_type": "proposal_operator",
++            "patch_name": self.proposal_operator.name,
++            "proposal_operator": self.proposal_operator.name,
++            "proposal_seed": operator_seed,
++            "novelty_attempt": novelty_attempt,
++            "resample_attempt": resample_attempt,
++            "repair_call": needs_fix,
++        }
++
++        try:
++            offspring = await invoke_proposal_operator(
++                self.proposal_operator,
++                parent_program,
++                inspirations,
++                rng,
++            )
++        except Exception as exc:
++            self.proposal_accounting["invalid_offspring"] += 1
++            base_metadata.update(
++                {
++                    "error_attempt": str(exc),
++                    "last_error_msg": str(exc),
++                    "proposal_accounting": dict(self.proposal_accounting),
++                }
++            )
++            return None, base_metadata, False
++
++        base_metadata.update(offspring.metadata)
++        base_metadata["proposal_accounting"] = dict(self.proposal_accounting)
++        if not offspring.valid:
++            self.proposal_accounting["invalid_offspring"] += 1
++            base_metadata.update(
++                {
++                    "error_attempt": offspring.error,
++                    "last_error_msg": offspring.error,
++                    "proposal_accounting": dict(self.proposal_accounting),
++                }
++            )
++            return None, base_metadata, False
++
++        assert offspring.source is not None
++        await write_file_async(exec_fname, offspring.source)
++        code_diff = "".join(
++            difflib.unified_diff(
++                parent_program.code.splitlines(keepends=True),
++                offspring.source.splitlines(keepends=True),
++                fromfile="parent",
++                tofile="offspring",
++            )
++        )
++        base_metadata["proposal_accounting"] = dict(self.proposal_accounting)
++        return code_diff, base_metadata, True
++
+     async def _generate_evolved_proposal(
+         self,
+         generation: int,
+@@ -2656,7 +2772,9 @@ class ShinkaEvolveRunner:
+         novelty_total_cost = 0.0
+         novelty_explanation = ""
+         last_failure_stage = "proposal"
+-        last_failure_reason = "LLM failed to generate a valid proposal after all attempts"
++        last_failure_reason = (
++            "LLM failed to generate a valid proposal after all attempts"
++        )
+         proposal_accepted = False
+         parent_program: Optional[Program] = None
+         archive_programs: List[Program] = []
+@@ -2699,8 +2817,21 @@ class ShinkaEvolveRunner:
+                             parent_program.id
+                         )
+ 
+-                    # Choose between fix mode and normal patch mode
+-                    if needs_fix:
++                    # Parent/inspiration sampling is runner-owned for every arm.
++                    # Only offspring construction is delegated to the injected
++                    # ProposalOperator, so evaluation/persistence/survivor behavior
++                    # below remains exactly shared.
++                    if getattr(self, "proposal_operator", None) is not None:
++                        patch_result = await self._run_controlled_operator_async(
++                            parent_program=parent_program,
++                            inspirations=tuple(archive_programs + top_k_programs),
++                            generation=generation,
++                            novelty_attempt=attempt + 1,
++                            resample_attempt=resample + 1,
++                            exec_fname=exec_fname,
++                            needs_fix=needs_fix,
++                        )
++                    elif needs_fix:
+                         # FIX MODE: No correct programs exist, try to fix
+                         # archive_programs contains ancestors in fix mode
+                         if self.verbose:
+@@ -3074,7 +3205,9 @@ class ShinkaEvolveRunner:
+ 
+         reason = (failure_reason or "").lower()
+         error_attempt = str((meta_patch_data or {}).get("error_attempt") or "").lower()
+-        last_error_msg = str((meta_patch_data or {}).get("last_error_msg") or "").lower()
++        last_error_msg = str(
++            (meta_patch_data or {}).get("last_error_msg") or ""
++        ).lower()
+         combined = " ".join(
+             part for part in [reason, error_attempt, last_error_msg] if part
+         )
+@@ -3259,8 +3392,8 @@ class ShinkaEvolveRunner:
+         failure_reason: str,
+     ) -> None:
+         """Record one terminal pre-eval failure via attempt_log plus failure.json."""
+-        terminal_failure_cost = float(api_costs) + float(embed_cost) + float(
+-            novelty_cost
++        terminal_failure_cost = (
++            float(api_costs) + float(embed_cost) + float(novelty_cost)
+         )
+         self.total_api_cost += terminal_failure_cost
+         if terminal_failure_cost > 0.0:
+@@ -3305,9 +3438,7 @@ class ShinkaEvolveRunner:
+                 "code_diff_available": bool(code_diff),
+                 "patch_type": (meta_patch_data or {}).get("patch_type"),
+                 "patch_name": (meta_patch_data or {}).get("patch_name"),
+-                "patch_description": (meta_patch_data or {}).get(
+-                    "patch_description"
+-                ),
++                "patch_description": (meta_patch_data or {}).get("patch_description"),
+                 "system_prompt_id": (meta_patch_data or {}).get("system_prompt_id"),
+                 "model_name": (meta_patch_data or {}).get("model_name"),
+                 "api_costs": api_costs,
+@@ -3553,6 +3684,125 @@ class ShinkaEvolveRunner:
+             logger.error(f"Error in fix patch async: {e}")
+             return None, {"api_costs": 0.0, "error_attempt": str(e)}, False
+ 
++    async def _run_numeric_patch_async(
++        self,
++        parent_program: Program,
++        generation: int,
++        novelty_attempt: int,
++        resample_attempt: int,
++        current_prompt_id: Optional[str],
++    ) -> Optional[Tuple[Optional[str], Dict[str, Any], bool]]:
++        """Run an LLM-free numeric-constant mutation patch."""
++        patch_type = "numeric"
++        patch_name = "numeric_constant_mutation"
++        patch_description = (
++            "Locally mutated numeric constants inside EVOLVE-BLOCK regions "
++            "without querying an LLM."
++        )
++        patch_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{generation}"
++
++        if self.verbose:
++            logger.info("Applying local numeric-constant mutation")
++
++        result = await apply_patch_async(
++            original_str=parent_program.code,
++            patch_str="",
++            patch_dir=patch_dir,
++            language=str(self.evo_config.language),
++            patch_type=patch_type,
++            verbose=False,
++            seed=derive_operator_seed(
++                self.proposal_root_seed,
++                generation,
++                novelty_attempt,
++                resample_attempt,
++            ),
++        )
++
++        (
++            _modified_code,
++            num_applied,
++            _output_path,
++            error_msg,
++            patch_txt,
++            patch_path,
++        ) = result
++
++        if error_msg is None and num_applied > 0:
++            diff_summary = {}
++            if patch_path:
++                diff_summary = summarize_diff(str(patch_path))
++                original_filename = f"original.{self.lang_ext}"
++                if original_filename in diff_summary:
++                    diff_summary = diff_summary[original_filename]
++
++            await self._save_patch_attempt_async(
++                generation=generation,
++                novelty_attempt=novelty_attempt,
++                resample_attempt=resample_attempt,
++                patch_attempt=1,
++                response=None,
++                error_msg=None,
++                patch_text=patch_txt,
++                num_applied=num_applied,
++                patch_name=patch_name,
++                patch_description=patch_description,
++                success=True,
++            )
++
++            meta_patch_data = {
++                "api_costs": 0.0,
++                "patch_type": patch_type,
++                "patch_name": patch_name,
++                "patch_description": patch_description,
++                "num_applied": num_applied,
++                "error_attempt": None,
++                "diff_summary": diff_summary,
++                "novelty_attempt": novelty_attempt,
++                "resample_attempt": resample_attempt,
++                "patch_attempt": 1,
++                "system_prompt_id": current_prompt_id,
++                "model_name": None,
++                "llm_result": None,
++            }
++
++            if self.verbose:
++                self._print_metadata_table(meta_patch_data, generation)
++
++            return patch_txt, meta_patch_data, True
++
++        error_str = error_msg or "No numeric constants changed"
++        await self._save_patch_attempt_async(
++            generation=generation,
++            novelty_attempt=novelty_attempt,
++            resample_attempt=resample_attempt,
++            patch_attempt=1,
++            response=None,
++            error_msg=error_str,
++            patch_text=patch_txt,
++            num_applied=num_applied,
++            patch_name=patch_name,
++            patch_description=patch_description,
++            success=False,
++        )
++
++        meta_patch_data = {
++            "api_costs": 0.0,
++            "patch_type": patch_type,
++            "patch_name": patch_name,
++            "patch_description": patch_description,
++            "num_applied": num_applied,
++            "error_attempt": error_str,
++            "last_error_msg": error_str,
++            "novelty_attempt": novelty_attempt,
++            "resample_attempt": resample_attempt,
++            "patch_attempt": 1,
++            "system_prompt_id": current_prompt_id,
++            "model_name": None,
++            "llm_result": None,
++        }
++        return None, meta_patch_data, False
++
+     async def _run_patch_async(
+         self,
+         parent_program: Program,
+@@ -3597,6 +3847,15 @@ class ShinkaEvolveRunner:
+                 if current_prompt_id:
+                     logger.info(f"Using evolved prompt: {current_prompt_id[:8]}...")
+ 
++            if patch_type == "numeric":
++                return await self._run_numeric_patch_async(
++                    parent_program=parent_program,
++                    generation=generation,
++                    novelty_attempt=novelty_attempt,
++                    resample_attempt=resample_attempt,
++                    current_prompt_id=current_prompt_id,
++                )
++
+             total_costs = 0.0
+             msg_history = []
+ 
+@@ -3776,7 +4035,9 @@ class ShinkaEvolveRunner:
+                 "patch_attempt": self.evo_config.max_patch_attempts,
+                 "system_prompt_id": current_prompt_id,  # Track evolved prompt
+                 **llm_kwargs,
+-                "llm_result": response.to_dict() if "response" in locals() and response else None,
++                "llm_result": response.to_dict()
++                if "response" in locals() and response
++                else None,
+             }
+ 
+             return None, meta_patch_data, False
+@@ -3897,7 +4158,10 @@ class ShinkaEvolveRunner:
+                 failure_reason=failure_reason,
+                 meta_patch_data=meta_patch_data,
+             )
+-            failure_json_path, failure_payload = await self._write_failure_artifact_async(
++            (
++                failure_json_path,
++                failure_payload,
++            ) = await self._write_failure_artifact_async(
+                 generation=generation,
+                 exec_fname=exec_fname,
+                 parent_program=parent_program,
+@@ -4415,18 +4679,22 @@ class ShinkaEvolveRunner:
+                     # Don't fail the whole job for meta summarizer issues
+ 
+             # Update LLM selection
+-            if self.llm_selection is not None and "model_name" in (
+-                program.metadata or {}
+-            ):
++            metadata = program.metadata or {}
++            model_name_for_reward = metadata.get("model_name")
++            should_update_llm_selection = (
++                self.llm_selection is not None
++                and bool(model_name_for_reward)
++                and metadata.get("patch_type") != "numeric"
++            )
++            if should_update_llm_selection:
+                 try:
+                     parent = None
+                     if program.parent_id:
+                         parent = await self.async_db.get_async(program.parent_id)
+                     baseline = parent.combined_score if parent else None
+                     reward = program.combined_score if program.correct else None
+-                    model_name = program.metadata["model_name"]
+                     self.llm_selection.update(
+-                        arm=model_name, reward=reward, baseline=baseline
++                        arm=model_name_for_reward, reward=reward, baseline=baseline
+                     )
+                     if self.verbose:
+                         self.llm_selection.print_summary(console=self.console)
+@@ -4449,10 +4717,14 @@ class ShinkaEvolveRunner:
+                 program.metadata = with_pipeline_timing(
+                     base_metadata,
+                     pipeline_started_at=float(
+-                        base_metadata.get("pipeline_started_at", job.proposal_started_at)
++                        base_metadata.get(
++                            "pipeline_started_at", job.proposal_started_at
++                        )
+                     ),
+                     sampling_started_at=float(
+-                        base_metadata.get("sampling_started_at", job.proposal_started_at)
++                        base_metadata.get(
++                            "sampling_started_at", job.proposal_started_at
++                        )
+                     ),
+                     sampling_finished_at=float(
+                         base_metadata.get(
+@@ -4596,8 +4868,7 @@ class ShinkaEvolveRunner:
+         finally:
+             self._completed_jobs_pending = max(
+                 0,
+-                int(getattr(self, "_completed_jobs_pending", 0))
+-                - len(completed_jobs),
++                int(getattr(self, "_completed_jobs_pending", 0)) - len(completed_jobs),
+             )
+ 
+         self._record_progress()
+@@ -4608,12 +4879,9 @@ class ShinkaEvolveRunner:
+         if self.completed_generations != old_completed:
+             if self.evo_config.max_api_costs is not None:
+                 cost_str = (
+-                    f"${self.total_api_cost:.4f}/"
+-                    f"${self.evo_config.max_api_costs:.2f}"
++                    f"${self.total_api_cost:.4f}/${self.evo_config.max_api_costs:.2f}"
+                 )
+-                cost_pct = (
+-                    self.total_api_cost / self.evo_config.max_api_costs
+-                ) * 100
++                cost_pct = (self.total_api_cost / self.evo_config.max_api_costs) * 100
+                 cost_info = f" (cost: {cost_str}, {cost_pct:.1f}%)"
+             else:
+                 cost_info = f" (cost: ${self.total_api_cost:.4f})"
+@@ -4636,12 +4904,9 @@ class ShinkaEvolveRunner:
+         elif new_retries > 0:
+             if self.evo_config.max_api_costs is not None:
+                 cost_str = (
+-                    f"${self.total_api_cost:.4f}/"
+-                    f"${self.evo_config.max_api_costs:.2f}"
++                    f"${self.total_api_cost:.4f}/${self.evo_config.max_api_costs:.2f}"
+                 )
+-                cost_pct = (
+-                    self.total_api_cost / self.evo_config.max_api_costs
+-                ) * 100
++                cost_pct = (self.total_api_cost / self.evo_config.max_api_costs) * 100
+                 cost_info = f", cost: {cost_str} ({cost_pct:.1f}%)"
+             else:
+                 cost_info = f", cost: ${self.total_api_cost:.4f}"
+diff --git a/shinka/core/proposal_operator.py b/shinka/core/proposal_operator.py
+new file mode 100644
+index 0000000..0fe8534
+--- /dev/null
++++ b/shinka/core/proposal_operator.py
+@@ -0,0 +1,107 @@
++"""Common proposal-operator contract for controlled evolutionary ablations.
++
++The runner owns parent/inspiration selection, retry policy, evaluation, persistence,
++and survivor selection.  An operator owns only offspring construction.  This keeps
++the LLM and grammar-guided GP arms on the same pipeline while making every source of
++operator randomness explicit and replayable.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import inspect
++import random
++from dataclasses import dataclass, field
++from typing import Any, Awaitable, Protocol, runtime_checkable
++
++from shinka.database import Program
++
++
++def derive_operator_seed(root_seed: int, *path: int) -> int:
++    """Stable, explicit 63-bit seed derivation for proposal attempts."""
++
++    if not isinstance(root_seed, int) or isinstance(root_seed, bool) or root_seed < 0:
++        raise ValueError("proposal root seed must be a non-negative int")
++    digest = hashlib.sha256(f"root:{root_seed}".encode("ascii"))
++    for component in path:
++        if (
++            not isinstance(component, int)
++            or isinstance(component, bool)
++            or component < 0
++        ):
++            raise ValueError("proposal seed path components must be non-negative ints")
++        digest.update(b"\x00")
++        digest.update(str(component).encode("ascii"))
++    return int.from_bytes(digest.digest()[:8], "big") & ((1 << 63) - 1)
++
++
++@dataclass(frozen=True)
++class ProposalOffspring:
++    """One operator result before evaluation.
++
++    ``source`` is ``None`` for an invalid proposal attempt.  Invalid attempts are
++    first-class results so the shared runner can count and archive them identically
++    for every arm instead of relying on operator-specific exceptions.
++    """
++
++    source: str | None
++    metadata: dict[str, Any] = field(default_factory=dict)
++    error: str | None = None
++
++    def __post_init__(self) -> None:
++        if self.source is None and not self.error:
++            raise ValueError("an invalid proposal needs a non-empty error")
++        if self.source is not None and not isinstance(self.source, str):
++            raise TypeError("proposal source must be a string or None")
++        if not isinstance(self.metadata, dict):
++            raise TypeError("proposal metadata must be a dict")
++
++    @property
++    def valid(self) -> bool:
++        return self.source is not None
++
++
++@runtime_checkable
++class ProposalOperator(Protocol):
++    """Minimal controlled-ablation interface.
++
++    Implementations may be synchronous or asynchronous.  The RNG is constructed by
++    the runner from an explicit root seed and a stable proposal-attempt path; an
++    operator must not consult global randomness or OS entropy.
++    """
++
++    name: str
++
++    def __call__(
++        self,
++        parent: Program,
++        inspirations: tuple[Program, ...],
++        rng: random.Random,
++    ) -> ProposalOffspring | Awaitable[ProposalOffspring]: ...
++
++
++async def invoke_proposal_operator(
++    operator: ProposalOperator,
++    parent: Program,
++    inspirations: tuple[Program, ...],
++    rng: random.Random,
++) -> ProposalOffspring:
++    """Invoke and validate either form of the common operator contract."""
++
++    result = operator(parent, inspirations, rng)
++    if inspect.isawaitable(result):
++        result = await result
++    if not isinstance(result, ProposalOffspring):
++        raise TypeError(
++            f"proposal operator {operator.name!r} returned {type(result).__name__}; "
++            "expected ProposalOffspring"
++        )
++    return result
++
++
++__all__ = [
++    "ProposalOffspring",
++    "ProposalOperator",
++    "derive_operator_seed",
++    "invoke_proposal_operator",
++]
+diff --git a/shinka/core/sampler.py b/shinka/core/sampler.py
+index 3e70f7b..3ae6e8e 100644
+--- a/shinka/core/sampler.py
++++ b/shinka/core/sampler.py
+@@ -143,6 +143,9 @@ class PromptSampler:
+             sys_msg += selected_format
+         elif patch_type == "cross":
+             sys_msg += CROSS_SYS_FORMAT
++        elif patch_type == "numeric":
++            # Numeric mutations are generated locally without an LLM prompt.
++            pass
+ 
+         # Build sorted inspiration context (combines archive + top-k)
+         sorted_inspirations = self.context_builder.build_context(
+@@ -197,6 +200,11 @@ class PromptSampler:
+                 top_k_inspirations,
+                 language=self.language,
+             )
++        elif patch_type == "numeric":
++            iter_msg = (
++                "Generate a local numeric-constant mutation inside EVOLVE-BLOCK "
++                "regions. This patch type does not query the LLM."
++            )
+         elif patch_type == "paper":
+             raise NotImplementedError("Paper edit not implemented.")
+         else:
+diff --git a/shinka/edit/__init__.py b/shinka/edit/__init__.py
+index 61c5ecb..88ccfc4 100644
+--- a/shinka/edit/__init__.py
++++ b/shinka/edit/__init__.py
+@@ -1,5 +1,6 @@
+ from .apply_diff import apply_diff_patch, redact_immutable
+ from .apply_full import apply_full_patch
++from .apply_numeric import apply_numeric_patch
+ from .marker_validation import validate_evolve_markers
+ from .summary import summarize_diff
+ 
+@@ -7,6 +8,7 @@ __all__ = [
+     "redact_immutable",
+     "apply_diff_patch",
+     "apply_full_patch",
++    "apply_numeric_patch",
+     "summarize_diff",
+     "validate_evolve_markers",
+ ]
+diff --git a/shinka/edit/apply_numeric.py b/shinka/edit/apply_numeric.py
+new file mode 100644
+index 0000000..9603768
+--- /dev/null
++++ b/shinka/edit/apply_numeric.py
+@@ -0,0 +1,390 @@
++"""Numeric-constant mutation patches for local, LLM-free exploration."""
++
++from __future__ import annotations
++
++import ast
++import random
++import re
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Optional, Union
++
++from shinka.utils.languages import get_language_extension, normalize_language
++
++from .apply_diff import _inside, _mutable_ranges, write_git_diff
++from .marker_validation import validate_evolve_markers
++
++
++@dataclass(frozen=True)
++class NumericLiteral:
++    start: int
++    end: int
++    text: str
++    prefer_int: bool
++    assigned_name: str | None = None
++
++
++_NUMBER_RE = re.compile(
++    r"(?<![\w.])[-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?(?![\w.])"
++)
++
++
++def _line_offsets(text: str) -> list[int]:
++    offsets = [0]
++    for line in text.splitlines(keepends=True):
++        offsets.append(offsets[-1] + len(line))
++    return offsets
++
++
++def _node_span(node: ast.AST, line_offsets: list[int]) -> tuple[int, int] | None:
++    if not all(
++        hasattr(node, attr)
++        for attr in ("lineno", "col_offset", "end_lineno", "end_col_offset")
++    ):
++        return None
++    start = line_offsets[node.lineno - 1] + node.col_offset
++    end = line_offsets[node.end_lineno - 1] + node.end_col_offset
++    return start, end
++
++
++def _line_for_offset(text: str, offset: int) -> str:
++    line_start = text.rfind("\n", 0, offset) + 1
++    line_end = text.find("\n", offset)
++    if line_end == -1:
++        line_end = len(text)
++    return text[line_start:line_end]
++
++
++def _is_python_number(value: object) -> bool:
++    return isinstance(value, (int, float)) and not isinstance(value, bool)
++
++
++def _literal_from_value_node(
++    original: str,
++    mutable: list[tuple[int, int]],
++    line_offsets: list[int],
++    value_node: ast.AST,
++    assigned_name: str | None,
++) -> NumericLiteral | None:
++    if not isinstance(value_node, ast.Constant) or not _is_python_number(
++        value_node.value
++    ):
++        return None
++
++    span = _node_span(value_node, line_offsets)
++    if span is None or not _inside(span, mutable):
++        return None
++
++    start, end = span
++    literal = original[start:end]
++    if not literal.strip():
++        return None
++
++    prefer_int = isinstance(value_node.value, int)
++    return NumericLiteral(
++        start=start,
++        end=end,
++        text=literal,
++        prefer_int=prefer_int,
++        assigned_name=assigned_name,
++    )
++
++
++def _python_named_numeric_literals(
++    original: str, mutable: list[tuple[int, int]]
++) -> list[NumericLiteral]:
++    try:
++        tree = ast.parse(original)
++    except SyntaxError:
++        return []
++
++    offsets = _line_offsets(original)
++    literals: list[NumericLiteral] = []
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Assign):
++            target_names = [t.id for t in node.targets if isinstance(t, ast.Name)]
++            if not target_names:
++                continue
++            literal = _literal_from_value_node(
++                original,
++                mutable,
++                offsets,
++                node.value,
++                assigned_name=target_names[0],
++            )
++            if literal is not None:
++                literals.append(literal)
++        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
++            literal = _literal_from_value_node(
++                original,
++                mutable,
++                offsets,
++                node.value,
++                assigned_name=node.target.id,
++            )
++            if literal is not None:
++                literals.append(literal)
++
++    return literals
++
++
++def _python_numeric_literals(
++    original: str, mutable: list[tuple[int, int]]
++) -> list[NumericLiteral]:
++    """Fallback for Python code without named numeric hyperparameters."""
++    try:
++        tree = ast.parse(original)
++    except SyntaxError:
++        return []
++
++    offsets = _line_offsets(original)
++    literals: list[NumericLiteral] = []
++    seen: set[tuple[int, int]] = set()
++    for node in ast.walk(tree):
++        literal = _literal_from_value_node(
++            original,
++            mutable,
++            offsets,
++            node,
++            assigned_name=None,
++        )
++        if literal is None:
++            continue
++        if (literal.start, literal.end) in seen:
++            continue
++        if "clip(" in _line_for_offset(original, literal.start):
++            continue
++        seen.add((literal.start, literal.end))
++        literals.append(literal)
++    return literals
++
++
++def _regex_numeric_literals(
++    original: str, mutable: list[tuple[int, int]]
++) -> list[NumericLiteral]:
++    literals: list[NumericLiteral] = []
++    for start, end in mutable:
++        for match in _NUMBER_RE.finditer(original[start:end]):
++            span_start = start + match.start()
++            span_end = start + match.end()
++            text = match.group(0)
++            prefer_int = "." not in text and "e" not in text.lower()
++            literals.append(
++                NumericLiteral(
++                    start=span_start,
++                    end=span_end,
++                    text=text,
++                    prefer_int=prefer_int,
++                )
++            )
++    return literals
++
++
++def _numeric_literals(
++    original: str,
++    mutable: list[tuple[int, int]],
++    language: str,
++) -> list[NumericLiteral]:
++    try:
++        normalized = normalize_language(language)
++    except ValueError:
++        normalized = language.strip().lower()
++
++    if normalized == "python":
++        named = _python_named_numeric_literals(original, mutable)
++        if named:
++            return named
++        return _python_numeric_literals(original, mutable)
++
++    return _regex_numeric_literals(original, mutable)
++
++
++def _parse_literal(literal: NumericLiteral) -> int | float | None:
++    try:
++        if literal.prefer_int:
++            return int(literal.text.replace("_", ""), 10)
++        return float(literal.text.replace("_", ""))
++    except ValueError:
++        return None
++
++
++def _mutate_int(value: int, rng: random.Random) -> int:
++    if value == 0:
++        return rng.choice([-1, 1])
++
++    magnitude = max(1, abs(value))
++    step = max(1, int(round(magnitude * rng.choice([0.05, 0.1, 0.15, 0.2]))))
++    mutated = value + rng.choice([-step, step])
++    if value > 0:
++        return max(1, mutated)
++    return min(-1, mutated)
++
++
++def _mutate_float(value: float, rng: random.Random) -> float:
++    if value == 0.0:
++        return rng.choice([-1.0, 1.0]) * rng.choice([1e-4, 1e-3, 1e-2])
++    return value * rng.choice([0.5, 0.7, 0.85, 0.9, 1.1, 1.15, 1.3, 1.5, 2.0])
++
++
++def _format_mutated_value(value: int | float, literal: NumericLiteral) -> str:
++    if literal.prefer_int:
++        return str(int(value))
++
++    text = f"{float(value):.12g}"
++    original = literal.text.lower()
++    if "e" not in text and "." not in text and ("." in original or "e" in original):
++        text += ".0"
++    return text
++
++
++def _mutated_text(literal: NumericLiteral, rng: random.Random) -> str | None:
++    value = _parse_literal(literal)
++    if value is None:
++        return None
++
++    for _ in range(10):
++        if literal.prefer_int:
++            mutated: int | float = _mutate_int(int(value), rng)
++        else:
++            mutated = _mutate_float(float(value), rng)
++        new_text = _format_mutated_value(mutated, literal)
++        if new_text != literal.text:
++            return new_text
++    return None
++
++
++def _build_patch_notes(
++    selected: list[tuple[NumericLiteral, str]],
++) -> str:
++    lines = ["Numeric constant mutation:"]
++    for literal, replacement in selected:
++        name = f"{literal.assigned_name}: " if literal.assigned_name else ""
++        lines.append(f"- {name}{literal.text} -> {replacement}")
++    return "\n".join(lines) + "\n"
++
++
++def apply_numeric_patch(
++    patch_str: str = "",
++    original_str: Optional[str] = None,
++    patch_dir: Optional[Union[str, Path]] = None,
++    original_path: Optional[Union[str, Path]] = None,
++    language: str = "python",
++    verbose: bool = True,
++    mutation_count: int | None = None,
++    *,
++    seed: int,
++) -> tuple[str, int, Optional[Path], Optional[str], Optional[str], Optional[Path]]:
++    """Mutate numeric constants inside EVOLVE blocks and emit normal patch files.
++
++    `patch_str` is accepted for interface compatibility with LLM-driven patch
++    applicators, but local numeric mutation does not read it.
++    """
++    del patch_str, verbose
++
++    if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
++        raise ValueError("numeric mutation seed must be an explicit non-negative int")
++
++    if original_str is None and original_path is None:
++        raise ValueError("Either original_str or original_path must be provided")
++    if original_str is None:
++        if original_path is None:
++            raise ValueError("original_path cannot be None")
++        original = Path(original_path).read_text("utf-8")
++    else:
++        original = original_str
++
++    mutable = _mutable_ranges(original)
++    if not mutable:
++        return (
++            original,
++            0,
++            None,
++            "No EVOLVE-BLOCK regions found in original content",
++            None,
++            None,
++        )
++
++    literals = _numeric_literals(original, mutable, language)
++    if not literals:
++        return (
++            original,
++            0,
++            None,
++            "No numeric constants found inside EVOLVE blocks",
++            None,
++            None,
++        )
++
++    rng = random.Random(seed)
++    max_mutations = min(len(literals), 2)
++    if mutation_count is None:
++        mutation_count = rng.randint(1, max_mutations)
++    mutation_count = max(1, min(mutation_count, len(literals)))
++
++    candidates = literals[:]
++    rng.shuffle(candidates)
++    selected: list[tuple[NumericLiteral, str]] = []
++    used_spans: set[tuple[int, int]] = set()
++    for literal in candidates:
++        span = (literal.start, literal.end)
++        if span in used_spans:
++            continue
++        replacement = _mutated_text(literal, rng)
++        if replacement is None:
++            continue
++        selected.append((literal, replacement))
++        used_spans.add(span)
++        if len(selected) >= mutation_count:
++            break
++
++    if not selected:
++        return (
++            original,
++            0,
++            None,
++            "Numeric mutation could not produce a changed literal",
++            None,
++            None,
++        )
++
++    updated = original
++    for literal, replacement in sorted(
++        selected, key=lambda item: item[0].start, reverse=True
++    ):
++        updated = updated[: literal.start] + replacement + updated[literal.end :]
++
++    marker_err = validate_evolve_markers(updated, language)
++    if marker_err is not None:
++        return original, 0, None, marker_err, None, None
++
++    if updated == original:
++        return original, 0, None, "Numeric mutation produced no change", None, None
++
++    suffix = f".{get_language_extension(language)}"
++    patch_txt: Optional[str] = None
++    patch_path: Optional[Path] = None
++    output_path: Optional[Path] = None
++
++    if patch_dir is not None:
++        patch_dir = Path(patch_dir)
++        patch_dir.mkdir(parents=True, exist_ok=True)
++        (patch_dir / "numeric_mutation.txt").write_text(
++            _build_patch_notes(selected),
++            encoding="utf-8",
++        )
++
++        backup_path = patch_dir / f"original{suffix}"
++        backup_path.write_text(original, encoding="utf-8")
++
++        output_path = patch_dir / f"main{suffix}"
++        output_path.write_text(updated, encoding="utf-8")
++
++        patch_path = write_git_diff(
++            original,
++            updated,
++            filename=backup_path.name,
++            out_path=patch_dir / "edit.diff",
++        )
++        patch_txt = patch_path.read_text(encoding="utf-8")
++
++    return updated, len(selected), output_path, None, patch_txt, patch_path
+diff --git a/shinka/edit/async_apply.py b/shinka/edit/async_apply.py
+index 0186de2..2258d2a 100644
+--- a/shinka/edit/async_apply.py
++++ b/shinka/edit/async_apply.py
+@@ -9,6 +9,7 @@ from typing import Tuple, Optional
+ from pathlib import Path
+ from .apply_diff import apply_diff_patch
+ from .apply_full import apply_full_patch
++from .apply_numeric import apply_numeric_patch
+ from shinka.utils.languages import normalize_language
+ from shinka.utils.wolfram import (
+     build_wolframscript_argv,
+@@ -55,6 +56,7 @@ async def apply_patch_async(
+     language: str = "python",
+     patch_type: str = "diff",
+     verbose: bool = False,
++    seed: Optional[int] = None,
+ ) -> Tuple[
+     Optional[str], int, Optional[str], Optional[str], Optional[str], Optional[Path]
+ ]:
+@@ -65,7 +67,7 @@ async def apply_patch_async(
+         patch_str: Patch content from LLM
+         patch_dir: Directory to write patch files
+         language: Programming language
+-        patch_type: Type of patch (diff, full, cross)
++        patch_type: Type of patch (diff, full, cross, numeric)
+         verbose: Enable verbose logging
+ 
+     Returns:
+@@ -86,9 +88,18 @@ async def apply_patch_async(
+             patch_func = apply_full_patch
+         elif patch_type == "diff":
+             patch_func = apply_diff_patch
++        elif patch_type == "numeric":
++            patch_func = apply_numeric_patch
+         else:
+             raise ValueError(f"Unknown patch type: {patch_type}")
+ 
++        if patch_type == "numeric" and (
++            not isinstance(seed, int) or isinstance(seed, bool) or seed < 0
++        ):
++            raise ValueError(
++                "numeric patches require an explicit non-negative integer seed"
++            )
++
+         # Run patch application in thread pool to avoid blocking
+         result = await loop.run_in_executor(
+             None,
+@@ -98,6 +109,7 @@ async def apply_patch_async(
+                 patch_dir=patch_dir,
+                 language=language,
+                 verbose=verbose,
++                **({"seed": seed} if patch_type == "numeric" else {}),
+             ),
+         )
+ 
+@@ -235,9 +247,7 @@ async def write_file_async(file_path: str, content: str) -> bool:
+             loop = asyncio.get_event_loop()
+             await loop.run_in_executor(
+                 None,
+-                lambda: Path(file_path).write_text(
+-                    content, encoding=TEXT_ENCODING
+-                ),
++                lambda: Path(file_path).write_text(content, encoding=TEXT_ENCODING),
+             )
+ 
+         return True
+diff --git a/tests/test_numeric_patch.py b/tests/test_numeric_patch.py
+new file mode 100644
+index 0000000..1d83269
+--- /dev/null
++++ b/tests/test_numeric_patch.py
+@@ -0,0 +1,111 @@
++from __future__ import annotations
++
++import asyncio
++
++from shinka.core.sampler import PromptSampler
++from shinka.database import Program
++from shinka.edit.apply_numeric import apply_numeric_patch
++from shinka.edit.async_apply import apply_patch_async
++
++
++PYTHON_PROGRAM = """IMMUTABLE_LIMIT = 10
++
++# EVOLVE-BLOCK-START
++def policy(x):
++    label = "keep 20 in this string"
++    # keep 80 in this comment
++    fast_window = 20
++    entry_band = 0.0005
++    return x * fast_window + entry_band
++# EVOLVE-BLOCK-END
++
++def outside():
++    return IMMUTABLE_LIMIT
++"""
++
++
++def test_apply_numeric_patch_mutates_named_constants_inside_evolve_block(tmp_path):
++    updated, num_applied, output_path, error, patch_txt, diff_path = (
++        apply_numeric_patch(
++            original_str=PYTHON_PROGRAM,
++            patch_dir=tmp_path,
++            language="python",
++            mutation_count=2,
++            seed=3,
++        )
++    )
++
++    assert error is None
++    assert num_applied == 2
++    assert output_path == tmp_path / "main.py"
++    assert diff_path == tmp_path / "edit.diff"
++    assert patch_txt is not None and "fast_window" in patch_txt
++    assert updated != PYTHON_PROGRAM
++    assert "IMMUTABLE_LIMIT = 10" in updated
++    assert '"keep 20 in this string"' in updated
++    assert "# keep 80 in this comment" in updated
++    compile(updated, "candidate.py", "exec")
++
++
++def test_apply_numeric_patch_rejects_program_without_numeric_literals():
++    program = """# EVOLVE-BLOCK-START
++def f():
++    return name
++# EVOLVE-BLOCK-END
++"""
++
++    updated, num_applied, output_path, error, patch_txt, diff_path = (
++        apply_numeric_patch(original_str=program, language="python", seed=1)
++    )
++
++    assert updated == program
++    assert num_applied == 0
++    assert output_path is None
++    assert error == "No numeric constants found inside EVOLVE blocks"
++    assert patch_txt is None
++    assert diff_path is None
++
++
++def test_apply_patch_async_dispatches_numeric_patch(tmp_path):
++    updated, num_applied, output_path, error, patch_txt, diff_path = asyncio.run(
++        apply_patch_async(
++            original_str=PYTHON_PROGRAM,
++            patch_str="",
++            patch_dir=str(tmp_path),
++            language="python",
++            patch_type="numeric",
++            seed=7,
++        )
++    )
++
++    assert error is None
++    assert num_applied >= 1
++    assert output_path == tmp_path / "main.py"
++    assert patch_txt is not None
++    assert diff_path == tmp_path / "edit.diff"
++    assert updated is not None and updated != PYTHON_PROGRAM
++
++
++def test_prompt_sampler_accepts_numeric_patch_type():
++    sampler = PromptSampler(
++        patch_types=["numeric"],
++        patch_type_probs=[1.0],
++        language="python",
++    )
++    parent = Program(
++        id="parent",
++        code=PYTHON_PROGRAM,
++        language="python",
++        generation=0,
++        combined_score=1.0,
++        public_metrics={},
++    )
++
++    _system_msg, user_msg, patch_type = sampler.sample(
++        parent=parent,
++        archive_inspirations=[],
++        top_k_inspirations=[],
++    )
++
++    assert patch_type == "numeric"
++    assert "does not query the LLM" in user_msg
+diff --git a/tests/test_proposal_operator.py b/tests/test_proposal_operator.py
+new file mode 100644
+index 0000000..aa7b4f2
+--- /dev/null
++++ b/tests/test_proposal_operator.py
+@@ -0,0 +1,147 @@
++from __future__ import annotations
++
++import asyncio
++import random
++
++import pytest
++
++from shinka.core.async_runner import ShinkaEvolveRunner
++from shinka.core.proposal_operator import (
++    ProposalOffspring,
++    derive_operator_seed,
++    invoke_proposal_operator,
++)
++from shinka.database import Program
++from shinka.edit.apply_numeric import apply_numeric_patch
++
++
++def _program(code: str = "parent") -> Program:
++    return Program(id="p", code=code, language="python", correct=True)
++
++
++class SeedEchoOperator:
++    name = "seed-echo"
++
++    def __call__(self, parent, inspirations, rng):
++        del inspirations
++        return ProposalOffspring(
++            source=f"{parent.code}:{rng.randrange(1_000_000)}",
++            metadata={"arm": self.name},
++        )
++
++
++def test_contract_accepts_sync_and_async_operators():
++    parent = _program()
++    sync_result = asyncio.run(
++        invoke_proposal_operator(SeedEchoOperator(), parent, (), random.Random(7))
++    )
++    assert sync_result.valid
++
++    class AsyncOperator:
++        name = "async"
++
++        async def __call__(self, parent, inspirations, rng):
++            del inspirations, rng
++            return ProposalOffspring(source=parent.code + ":async")
++
++    async_result = asyncio.run(
++        invoke_proposal_operator(AsyncOperator(), parent, (), random.Random(7))
++    )
++    assert async_result.source == "parent:async"
++
++
++def test_seed_derivation_is_stable_and_path_separated():
++    assert derive_operator_seed(5, 1, 2, 3) == derive_operator_seed(5, 1, 2, 3)
++    assert derive_operator_seed(5, 1, 2, 3) != derive_operator_seed(5, 1, 3, 2)
++    with pytest.raises(ValueError):
++        derive_operator_seed(-1, 0)
++
++
++def test_runner_operator_path_is_seeded_and_accounts_attempts(tmp_path):
++    runner = ShinkaEvolveRunner.__new__(ShinkaEvolveRunner)
++    runner.proposal_operator = SeedEchoOperator()
++    runner.proposal_root_seed = 42
++    runner.proposal_accounting = {
++        "attempts": 0,
++        "invalid_offspring": 0,
++        "retries": 0,
++        "repair_calls": 0,
++    }
++    target = tmp_path / "candidate.py"
++
++    first = asyncio.run(
++        runner._run_controlled_operator_async(
++            parent_program=_program(),
++            inspirations=(),
++            generation=3,
++            novelty_attempt=1,
++            resample_attempt=1,
++            exec_fname=str(target),
++            needs_fix=False,
++        )
++    )
++    target.unlink()
++    runner.proposal_accounting = dict.fromkeys(runner.proposal_accounting, 0)
++    second = asyncio.run(
++        runner._run_controlled_operator_async(
++            parent_program=_program(),
++            inspirations=(),
++            generation=3,
++            novelty_attempt=1,
++            resample_attempt=1,
++            exec_fname=str(target),
++            needs_fix=False,
++        )
++    )
++
++    assert first == second
++    assert first[2] is True
++    assert target.read_text(encoding="utf-8").startswith("parent:")
++    assert runner.proposal_accounting == {
++        "attempts": 1,
++        "invalid_offspring": 0,
++        "retries": 0,
++        "repair_calls": 0,
++    }
++
++
++def test_runner_counts_invalid_retry_and_repair(tmp_path):
++    class InvalidOperator:
++        name = "invalid"
++
++        def __call__(self, parent, inspirations, rng):
++            del parent, inspirations, rng
++            return ProposalOffspring(source=None, error="invalid syntax")
++
++    runner = ShinkaEvolveRunner.__new__(ShinkaEvolveRunner)
++    runner.proposal_operator = InvalidOperator()
++    runner.proposal_root_seed = 9
++    runner.proposal_accounting = {
++        "attempts": 0,
++        "invalid_offspring": 0,
++        "retries": 0,
++        "repair_calls": 0,
++    }
++    result = asyncio.run(
++        runner._run_controlled_operator_async(
++            parent_program=_program(),
++            inspirations=(),
++            generation=4,
++            novelty_attempt=1,
++            resample_attempt=2,
++            exec_fname=str(tmp_path / "unused.py"),
++            needs_fix=True,
++        )
++    )
++    assert result[2] is False
++    assert runner.proposal_accounting == {
++        "attempts": 1,
++        "invalid_offspring": 1,
++        "retries": 1,
++        "repair_calls": 1,
++    }
++
++
++def test_numeric_patch_seed_is_required():
++    with pytest.raises(TypeError):
++        apply_numeric_patch(original_str="x = 1")

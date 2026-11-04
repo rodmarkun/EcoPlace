@@ -1,0 +1,72 @@
+name: conformance
+
+# PlacementScript conformance suite: every language construct +
+# numeric edge cases (overflow, subnormals, division, comparisons), fuel/oom traps,
+# tie-breaking — executed against the native AND wasm32-wasip1 builds of the SAME
+# placementscript-core crate, requiring bit-identical outcomes (values, error classes,
+# fuel, memory). Regression guard, not an equivalence proof: there is one interpreter.
+#
+# The wasm suites run against BOTH the debug and the release guest, each pinned via
+# PS_WASM_GUEST to the exact artifact built here (deployment uses release; a stale
+# local artifact must never be what CI tested). The normative spec is in
+# the path filters: spec changes re-run the suite.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "runtime/**"
+      - "docs/placementscript-spec.md"
+      - ".github/workflows/conformance.yml"
+  pull_request:
+    paths:
+      - "runtime/**"
+      - "docs/placementscript-spec.md"
+      - ".github/workflows/conformance.yml"
+
+jobs:
+  conformance:
+    name: conformance suite (native + wasm debug/release)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runtime
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, wasm32-wasip1)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runtime
+
+      - name: Build the guest module, debug + release (interpreter + embedded seed policy)
+        run: |
+          cargo build -p placementscript-wasm-guest --target wasm32-wasip1
+          cargo build -p placementscript-wasm-guest --target wasm32-wasip1 --release
+
+      - name: Native conformance
+        run: cargo test -p placementscript-conformance --test native -- --nocapture
+
+      - name: WASM conformance, debug guest (bit-identical to native; zero WASI capabilities)
+        env:
+          PS_WASM_GUEST: ${{ github.workspace }}/runtime/target/wasm32-wasip1/debug/placementscript_wasm_guest.wasm
+        run: cargo test -p placementscript-conformance --test wasm -- --nocapture
+
+      - name: WASM conformance, release guest (the deployed profile)
+        env:
+          PS_WASM_GUEST: ${{ github.workspace }}/runtime/target/wasm32-wasip1/release/placementscript_wasm_guest.wasm
+        run: cargo test -p placementscript-conformance --test wasm -- --nocapture
+
+      - name: Seed-policy + stateful-ABI parity, debug guest (load / score_batch / propose_moves)
+        env:
+          PS_WASM_GUEST: ${{ github.workspace }}/runtime/target/wasm32-wasip1/debug/placementscript_wasm_guest.wasm
+        run: cargo test -p placementscript-conformance --test policies --test stateful -- --nocapture
+
+      - name: Seed-policy + stateful-ABI parity, release guest
+        env:
+          PS_WASM_GUEST: ${{ github.workspace }}/runtime/target/wasm32-wasip1/release/placementscript_wasm_guest.wasm
+        run: cargo test -p placementscript-conformance --test policies --test stateful -- --nocapture

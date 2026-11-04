@@ -1,0 +1,113 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def proximity_of(mean_latency_ms: float) -> float:
+    scaled = max(mean_latency_ms, 0.0) / 45.0
+    return 1.0 - min(scaled, 1.0)
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_before = float(node.cpu_allocated) / cpu_cap
+    mem_before = float(node.mem_allocated) / mem_cap
+    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap
+    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap
+    peak = max(cpu_after, mem_after)
+    if peak >= 1.0:
+        return -1000000.0
+
+    # Retain nonlinear overload protection while permitting modest consolidation.
+    queue_cost = peak / max(1.0 - peak, 0.01)
+    burst = max(peak - 0.62, 0.0)
+    burst_cost = burst * burst * 18.0
+
+    weighted = 0.0
+    weighted_tail = 0.0
+    weight = 0.0
+    longest = 0.0
+    neighbor_pressure = 0.0
+    edges = len(ctx.graph.src)
+    for e in range(edges):
+        source = ctx.graph.src[e]
+        destination = ctx.graph.dst[e]
+        other = -1
+        if source == pod.id:
+            other = destination
+        elif destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor_node = ctx.pods[other].current_node
+            rate = ctx.graph.rate[e]
+            if neighbor_node >= 0 and rate > 0.0:
+                latency = node.latency_to_ms[neighbor_node]
+                if destination == pod.id:
+                    latency = ctx.nodes[neighbor_node].latency_to_ms[node.id]
+                if neighbor_node == node.id:
+                    latency = 0.0
+                latency = max(latency, 0.0)
+                tail = max(latency - 20.0, 0.0) / 45.0
+                weighted = weighted + rate * latency
+                weighted_tail = weighted_tail + rate * tail * tail
+                weight = weight + rate
+                longest = max(longest, latency)
+
+                neighbor_cpu_cap = float(max(ctx.nodes[neighbor_node].cpu_capacity, 1))
+                neighbor_mem_cap = float(max(ctx.nodes[neighbor_node].mem_capacity, 1))
+                neighbor_cpu = float(ctx.nodes[neighbor_node].cpu_allocated) / neighbor_cpu_cap
+                neighbor_mem = float(ctx.nodes[neighbor_node].mem_allocated) / neighbor_mem_cap
+                neighbor_peak = max(neighbor_cpu, neighbor_mem)
+                if neighbor_node == node.id:
+                    neighbor_peak = peak
+                neighbor_queue = neighbor_peak / max(1.0 - neighbor_peak, 0.01)
+                neighbor_pressure = neighbor_pressure + rate * min(neighbor_queue, 12.0)
+
+    mean_latency = 22.5
+    mean_tail = 0.0
+    mean_neighbor_queue = 0.0
+    if weight > 0.0:
+        mean_latency = weighted / weight
+        mean_tail = weighted_tail / weight
+        mean_neighbor_queue = neighbor_pressure / weight
+
+    longest_tail = max(longest - 20.0, 0.0) / 45.0
+    latency_cost = mean_latency / 45.0 * 0.90
+    latency_cost = latency_cost + longest / 45.0 * 0.30
+    latency_cost = latency_cost + mean_tail * 0.50
+    latency_cost = latency_cost + longest_tail * longest_tail * 0.30
+
+    # Remote queueing reduces the margin available for network delay.
+    interaction = mean_latency / 45.0 * min(queue_cost, 8.0) * 0.08
+    interaction = interaction + mean_latency / 45.0 * mean_neighbor_queue * 0.02
+
+    before = max(cpu_before, mem_before)
+    incremental_load = max(peak - before, 0.0)
+    incremental_power = max(node.power_max_w - node.power_idle_w, 0.0) * incremental_load
+    if node.suspendable and node.cpu_allocated == 0 and node.mem_allocated == 0:
+        incremental_power = incremental_power + node.power_idle_w
+
+    # Prefer lower marginal draw and reuse active capacity below the reserve knee.
+    cost = queue_cost * 0.20 + burst_cost + latency_cost + interaction
+    cost = cost + incremental_power / 120.0 * 0.60
+    return -cost
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    # Cumulative disruption allowances are unavailable. Preserve serving capacity
+    # and consume no migration count, transferred bytes or unavailability budget.
+    return out
+# EVOLVE-BLOCK-END

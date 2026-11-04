@@ -1,0 +1,117 @@
+# ruff: noqa: F821
+# least_allocated — Phase-5 seed policy.  Identity stays outside EVOLVE-BLOCKs;
+# Shinka operators may change only the policy implementation below.
+POLICY_NAME: str = "least_allocated"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def cpu_util(node: NodeState) -> float:
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    return float(node.cpu_allocated) / cpu_cap
+
+
+def mem_util(node: NodeState) -> float:
+    mem_cap = float(max(node.mem_capacity, 1))
+    return float(node.mem_allocated) / mem_cap
+
+
+def pressure(node: NodeState) -> float:
+    return max(cpu_util(node), mem_util(node))
+
+
+def free_fraction_after(pod: Pod, node: NodeState) -> float:
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_free = max(cpu_cap - float(node.cpu_allocated + pod.cpu_request), 0.0)
+    mem_free = max(mem_cap - float(node.mem_allocated + pod.mem_request), 0.0)
+    cpu_frac = cpu_free / cpu_cap
+    mem_frac = mem_free / mem_cap
+    balanced_free = min(cpu_frac, mem_frac)
+    average_free = (cpu_frac + mem_frac) / 2.0
+    return balanced_free * 0.80 + average_free * 0.20
+
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1.0
+    cpu_after = node.cpu_allocated + pod.cpu_request
+    mem_after = node.mem_allocated + pod.mem_request
+    if cpu_after > node.cpu_capacity or mem_after > node.mem_capacity:
+        return -1.0
+    return free_fraction_after(pod, node)
+
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0 or len(state.nodes) < 2:
+        return out
+
+    source = -1
+    source_pressure = -1.0
+    source_cpu_allocated = 0
+    source_mem_allocated = 0
+    source_cpu_capacity = 0
+    source_mem_capacity = 0
+    target = -1
+    target_pressure = 2.0
+    target_cpu_allocated = -1
+    target_mem_allocated = 0
+    target_cpu_capacity = 0
+    target_mem_capacity = 0
+
+    for node in state.nodes:
+        if not node.suspended:
+            node_pressure = pressure(node)
+            if node_pressure > source_pressure:
+                source = node.id
+                source_pressure = node_pressure
+                source_cpu_allocated = node.cpu_allocated
+                source_mem_allocated = node.mem_allocated
+                source_cpu_capacity = node.cpu_capacity
+                source_mem_capacity = node.mem_capacity
+            if node_pressure < target_pressure:
+                target = node.id
+                target_pressure = node_pressure
+                target_cpu_allocated = node.cpu_allocated
+                target_mem_allocated = node.mem_allocated
+                target_cpu_capacity = node.cpu_capacity
+                target_mem_capacity = node.mem_capacity
+
+    if source < 0 or target < 0 or source == target:
+        return out
+    if source_pressure - target_pressure < 0.20:
+        return out
+
+    moved = 0
+    planned_source_cpu = source_cpu_allocated
+    planned_source_mem = source_mem_allocated
+    planned_target_cpu = target_cpu_allocated
+    planned_target_mem = target_mem_allocated
+
+    for pod in state.pods:
+        if moved < budget and pod.current_node == source:
+            if not pod.stateful and not pod.has_pdb:
+                next_target_cpu = planned_target_cpu + pod.cpu_request
+                next_target_mem = planned_target_mem + pod.mem_request
+                if next_target_cpu <= target_cpu_capacity and next_target_mem <= target_mem_capacity:
+                    next_source_cpu = planned_source_cpu - pod.cpu_request
+                    next_source_mem = planned_source_mem - pod.mem_request
+                    source_cpu_cap = float(max(source_cpu_capacity, 1))
+                    source_mem_cap = float(max(source_mem_capacity, 1))
+                    target_cpu_cap = float(max(target_cpu_capacity, 1))
+                    target_mem_cap = float(max(target_mem_capacity, 1))
+                    next_source_cpu_util = float(max(next_source_cpu, 0)) / source_cpu_cap
+                    next_source_mem_util = float(max(next_source_mem, 0)) / source_mem_cap
+                    next_target_cpu_util = float(next_target_cpu) / target_cpu_cap
+                    next_target_mem_util = float(next_target_mem) / target_mem_cap
+                    next_source_pressure = max(next_source_cpu_util, next_source_mem_util)
+                    next_target_pressure = max(next_target_cpu_util, next_target_mem_util)
+                    if next_target_pressure <= next_source_pressure:
+                        out.append(move_pod(pod.id, target))
+                        planned_source_cpu = next_source_cpu
+                        planned_source_mem = next_source_mem
+                        planned_target_cpu = next_target_cpu
+                        planned_target_mem = next_target_mem
+                        moved += 1
+    return out
+# EVOLVE-BLOCK-END

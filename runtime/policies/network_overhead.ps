@@ -1,0 +1,26 @@
+# NetworkOverhead-style scorer re-expressed over CallGraphCtx + the simulator latency
+# matrix. The upstream AppGroup/NetworkTopology CRD and max-cost Filter contracts do not
+# map to our observation/actuation surface; the accumulated dependency-cost Score idea
+# does, and is implemented here. Lower cost is better, hence the negated return value.
+POLICY_NAME: str = "network_overhead"
+POLICY_VERSION: str = "1.0.0"
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    total = 0.0
+    for edge in range(len(ctx.graph.src)):
+        source = ctx.graph.src[edge]
+        destination = ctx.graph.dst[edge]
+        other = -1
+        if source == pod.id:
+            other = destination
+        if destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                total += node.latency_to_ms[neighbor.current_node]
+    return -total
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    return out

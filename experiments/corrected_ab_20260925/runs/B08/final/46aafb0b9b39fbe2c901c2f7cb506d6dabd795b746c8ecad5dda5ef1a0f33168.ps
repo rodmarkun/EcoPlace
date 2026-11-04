@@ -1,0 +1,158 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def node_energy(node: NodeState) -> float:
+    if node.suspended:
+        return 0.0
+    if node.suspendable and node.cpu_allocated == 0 and node.mem_allocated == 0:
+        return 0.0
+    cpu_util = 0.0
+    if node.cpu_capacity > 0:
+        cpu_util = float(node.cpu_allocated) / float(node.cpu_capacity)
+    mem_util = 0.0
+    if node.mem_capacity > 0:
+        mem_util = float(node.mem_allocated) / float(node.mem_capacity)
+    util = cpu_util
+    if mem_util > util:
+        util = mem_util
+    return node.power_idle_w + (node.power_max_w - node.power_idle_w) * util
+
+def node_energy_after(node: NodeState, cpu_delta: int, mem_delta: int) -> float:
+    cpu_alloc = node.cpu_allocated + cpu_delta
+    mem_alloc = node.mem_allocated + mem_delta
+    if node.suspendable and cpu_alloc == 0 and mem_alloc == 0:
+        return 0.0
+    cpu_util = 0.0
+    if node.cpu_capacity > 0:
+        cpu_util = float(cpu_alloc) / float(node.cpu_capacity)
+    mem_util = 0.0
+    if node.mem_capacity > 0:
+        mem_util = float(mem_alloc) / float(node.mem_capacity)
+    util = cpu_util
+    if mem_util > util:
+        util = mem_util
+    return node.power_idle_w + (node.power_max_w - node.power_idle_w) * util
+
+def graph_latency(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    total = 0.0
+    m = len(ctx.graph.src)
+    for e in range(m):
+        s = ctx.graph.src[e]
+        d = ctx.graph.dst[e]
+        other = -1
+        if s == pod.id:
+            other = d
+        if d == pod.id:
+            other = s
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                total += ctx.graph.rate[e] * node.latency_to_ms[neighbor.current_node]
+    return total
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+    active = node.cpu_allocated > 0 or node.mem_allocated > 0
+    if node.suspendable and not active:
+        return -1000000.0
+    delta = node_energy_after(node, pod.cpu_request, pod.mem_request) - node_energy(node)
+    pre_util = 0.0
+    if node.cpu_capacity > 0:
+        pre_util = float(node.cpu_allocated) / float(node.cpu_capacity)
+    mem_pre = 0.0
+    if node.mem_capacity > 0:
+        mem_pre = float(node.mem_allocated) / float(node.mem_capacity)
+    if mem_pre > pre_util:
+        pre_util = mem_pre
+    pack = 0.2 * pre_util
+    if not node.suspendable:
+        pack += 0.5
+    lat = graph_latency(pod, node, ctx)
+    return -delta - 0.0005 * lat + pack
+
+def pod_latency(pod: Pod, node: NodeState, state: ClusterState, graph: CallGraphCtx) -> float:
+    total = 0.0
+    m = len(graph.src)
+    for e in range(m):
+        s = graph.src[e]
+        d = graph.dst[e]
+        other = -1
+        if s == pod.id:
+            other = d
+        if d == pod.id:
+            other = s
+        if other >= 0 and other != pod.id:
+            neighbor = state.pods[other]
+            if neighbor.current_node >= 0:
+                total += graph.rate[e] * node.latency_to_ms[neighbor.current_node]
+    return total
+
+def node_fits_pod(node: NodeState, pod: Pod) -> bool:
+    if node.suspended:
+        return False
+    cpu_ok = node.cpu_allocated + pod.cpu_request <= node.cpu_capacity
+    mem_ok = node.mem_allocated + pod.mem_request <= node.mem_capacity
+    return cpu_ok and mem_ok
+
+def is_used_dest(used_dest: list[int], j: int) -> bool:
+    for k in range(len(used_dest)):
+        if used_dest[k] == j:
+            return True
+    return False
+
+def find_move_for_pod(pod: Pod, src_node: NodeState, state: ClusterState, graph: CallGraphCtx, used_dest: list[int]) -> int:
+    old_lat = pod_latency(pod, src_node, state, graph)
+    n_nodes = len(state.nodes)
+    for j in range(n_nodes):
+        if j != pod.current_node:
+            dest = state.nodes[j]
+            fits = node_fits_pod(dest, pod)
+            if fits:
+                used = is_used_dest(used_dest, j)
+                if not used:
+                    new_lat = pod_latency(pod, dest, state, graph)
+                    lat_ok = new_lat <= old_lat
+                    if lat_ok:
+                        before = node_energy(src_node) + node_energy(dest)
+                        src_after = node_energy_after(src_node, -pod.cpu_request, -pod.mem_request)
+                        dst_after = node_energy_after(dest, pod.cpu_request, pod.mem_request)
+                        after = src_after + dst_after
+                        if after < before:
+                            return j
+    return -1
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0:
+        return out
+    moved = 0
+    used_dest: list[int] = []
+    n_pods = len(state.pods)
+    for i in range(n_pods):
+        if moved >= budget:
+            return out
+        pod = state.pods[i]
+        movable = pod.current_node >= 0 and not pod.stateful and not pod.has_pdb
+        if movable:
+            src_node = state.nodes[pod.current_node]
+            dest_idx = find_move_for_pod(pod, src_node, state, graph, used_dest)
+            if dest_idx >= 0:
+                out.append(move_pod(pod.id, dest_idx))
+                moved += 1
+                used_dest.append(dest_idx)
+    return out
+# EVOLVE-BLOCK-END

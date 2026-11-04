@@ -1,0 +1,95 @@
+# graph_headroom — the dependency-aware *and* capacity-aware hand-written baseline.
+#
+# The existing hand-written set is one-sided: latency_greedy and network_overhead read
+# ctx.graph and co-locate without ever looking at load, so on a scenario whose SLO is
+# queueing-dominated they pack until latency explodes; least_allocated reads load and
+# never reads the graph, so it spreads a call chain across sites and pays the wire.
+# This policy combines both terms plus an idle-power preference, which is the shape a
+# competent engineer would actually write and therefore the shape an automatic method
+# has to beat. It is a *baseline*, never an evolved candidate.
+#
+# Requires the prospective-edge projection in sim.scheduler._pod_level_graph: without
+# it the pod being scored carries no call-graph edges and the affinity term is dead.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# Worst modelled inter-node hop is the 45 ms cloud<->far-edge path; dividing by it maps
+# mean neighbour latency onto [0, 1] so the three terms combine on one scale.
+def proximity_of(mean_latency_ms: float) -> float:
+    scaled = mean_latency_ms / 45.0
+    return 1.0 - min(scaled, 1.0)
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap
+    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap
+    peak = max(cpu_after, mem_after)
+    if peak > 1.0:
+        return -1000000.0
+
+    # Headroom on the bottleneck resource: the queueing term. Contention, not capacity
+    # admission, is what breaks the SLO here, so the *margin* is what matters.
+    headroom = 1.0 - peak
+
+    # Rate-weighted mean latency to this pod's already-placed call-graph neighbours.
+    weighted = 0.0
+    weight = 0.0
+    edges = len(ctx.graph.src)
+    for e in range(edges):
+        source = ctx.graph.src[e]
+        destination = ctx.graph.dst[e]
+        other = -1
+        if source == pod.id:
+            other = destination
+        if destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                rate = ctx.graph.rate[e]
+                weighted = weighted + rate * node.latency_to_ms[neighbor.current_node]
+                weight = weight + rate
+
+    # A pod with no placed neighbours yet gets a neutral 0.5 rather than a free 1.0:
+    # rewarding "no neighbours" would bias the very first replica of every service.
+    proximity = 0.5
+    if weight > 0.0:
+        proximity = proximity_of(weighted / weight)
+
+    # Idle draw spans 1.8 W (far edge) to 108 W (the dev-1 fog server); the divisor keeps
+    # the term bounded without hard-coding a tier test.
+    efficiency = 1.0 - min(node.power_idle_w / 120.0, 1.0)
+    return headroom * 0.50 + proximity * 0.35 + efficiency * 0.15
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0:
+        return out
+    moved = 0
+    edges = len(graph.src)
+    for e in range(edges):
+        source_pod = state.pods[graph.src[e]]
+        destination_pod = state.pods[graph.dst[e]]
+        movable = (
+            moved < budget
+            and source_pod.current_node >= 0
+            and destination_pod.current_node >= 0
+            and source_pod.current_node != destination_pod.current_node
+            and not source_pod.stateful
+            and not source_pod.has_pdb
+        )
+        if movable:
+            target = state.nodes[destination_pod.current_node]
+            cpu_cap = float(max(target.cpu_capacity, 1))
+            mem_cap = float(max(target.mem_capacity, 1))
+            cpu_after = float(target.cpu_allocated + source_pod.cpu_request) / cpu_cap
+            mem_after = float(target.mem_allocated + source_pod.mem_request) / mem_cap
+            # Only co-locate when the target keeps real margin afterwards: an
+            # unconditional pull is what makes latency_greedy overload.
+            if not target.suspended and max(cpu_after, mem_after) < 0.70:
+                out.append(move_pod(source_pod.id, destination_pod.current_node))
+                moved = moved + 1
+    return out

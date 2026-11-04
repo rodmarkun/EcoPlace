@@ -1,0 +1,111 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def resource_score(requested: int, capacity: int) -> float:
+    if capacity <= 0 or requested > capacity:
+        return -1000.0
+    return float((capacity - requested) * 100 // capacity)
+
+def can_place(pod: Pod, node: NodeState) -> bool:
+    if node.suspended:
+        return False
+    if node.cpu_allocated + pod.cpu_request > node.cpu_capacity:
+        return False
+    if node.mem_allocated + pod.mem_request > node.mem_capacity:
+        return False
+    if node.cpu_capacity > 0:
+        free_cpu = node.cpu_capacity - node.cpu_allocated - pod.cpu_request
+        if free_cpu * 10 < node.cpu_capacity:
+            return False
+    if node.mem_capacity > 0:
+        free_mem = node.mem_capacity - node.mem_allocated - pod.mem_request
+        if free_mem * 10 < node.mem_capacity:
+            return False
+    return True
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    total = 0.0
+    cpu_before = 0.0
+    if node.cpu_capacity > 0:
+        cpu_before = float(node.cpu_allocated) / float(node.cpu_capacity)
+    cpu_after = 0.0
+    if node.cpu_capacity > 0:
+        cpu_after = float(node.cpu_allocated + pod.cpu_request) / float(node.cpu_capacity)
+    mem_before = 0.0
+    if node.mem_capacity > 0:
+        mem_before = float(node.mem_allocated) / float(node.mem_capacity)
+    mem_after = 0.0
+    if node.mem_capacity > 0:
+        mem_after = float(node.mem_allocated + pod.mem_request) / float(node.mem_capacity)
+    util_before = cpu_before
+    if mem_before > util_before:
+        util_before = mem_before
+    util_after = cpu_after
+    if mem_after > util_after:
+        util_after = mem_after
+    delta = util_after - util_before
+    if delta < 0.0:
+        delta = 0.0
+    power_delta = (node.power_max_w - node.power_idle_w) * delta
+    total -= power_delta * 0.1
+    cpu_head = resource_score(node.cpu_allocated + pod.cpu_request, node.cpu_capacity)
+    mem_head = resource_score(node.mem_allocated + pod.mem_request, node.mem_capacity)
+    total += (cpu_head + mem_head) * 0.3
+    lat = 0.0
+    m = len(ctx.graph.src)
+    for e in range(m):
+        s = ctx.graph.src[e]
+        d = ctx.graph.dst[e]
+        other = -1
+        if s == pod.id:
+            other = d
+        if d == pod.id:
+            other = s
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                rate = ctx.graph.rate[e]
+                lat += rate * node.latency_to_ms[neighbor.current_node]
+    total -= lat * 0.2
+    if node.suspended:
+        total -= 1000.0
+    return total
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0:
+        return out
+    moved = 0
+    m = len(graph.src)
+    for e in range(m):
+        if moved < budget and graph.rate[e] > 0.0:
+            sp = state.pods[graph.src[e]]
+            dp = state.pods[graph.dst[e]]
+            placed = sp.current_node >= 0 and dp.current_node >= 0
+            if placed and sp.current_node != dp.current_node:
+                target = dp.current_node
+                dest = state.nodes[target]
+                if can_place(sp, dest) and not sp.stateful and not sp.has_pdb:
+                    out.append(move_pod(sp.id, target))
+                    moved += 1
+                else:
+                    target2 = sp.current_node
+                    dest2 = state.nodes[target2]
+                    if can_place(dp, dest2) and not dp.stateful and not dp.has_pdb:
+                        out.append(move_pod(dp.id, target2))
+                        moved += 1
+    return out
+# EVOLVE-BLOCK-END

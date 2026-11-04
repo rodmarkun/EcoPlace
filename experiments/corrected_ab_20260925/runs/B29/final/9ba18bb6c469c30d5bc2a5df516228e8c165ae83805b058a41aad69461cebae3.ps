@@ -1,0 +1,169 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def affinity_to(pod_id: int, node_id: int, state: ClusterState, graph: CallGraphCtx) -> float:
+    s = 0.0
+    m = len(graph.src)
+    for e in range(m):
+        a = graph.src[e]
+        b = graph.dst[e]
+        other = -1
+        if a == pod_id:
+            other = b
+        if b == pod_id:
+            other = a
+        if other >= 0 and other != pod_id:
+            if state.pods[other].current_node == node_id:
+                s += graph.rate[e]
+    return s
+
+
+def node_power(node: NodeState, cpu_alloc: int) -> float:
+    if node.suspended:
+        return 0.0
+    if cpu_alloc <= 0:
+        return 0.0
+    util = float(cpu_alloc) / float(node.cpu_capacity)
+    return node.power_idle_w + (node.power_max_w - node.power_idle_w) * util
+
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+    cpu_ok = node.cpu_allocated + pod.cpu_request <= node.cpu_capacity
+    mem_ok = node.mem_allocated + pod.mem_request <= node.mem_capacity
+    if not cpu_ok:
+        return -1000000.0
+    if not mem_ok:
+        return -1000000.0
+
+    total_lat = 0.0
+    on_node = 0
+    m = len(ctx.graph.src)
+    for e in range(m):
+        s = ctx.graph.src[e]
+        d = ctx.graph.dst[e]
+        other = -1
+        if s == pod.id:
+            other = d
+        if d == pod.id:
+            other = s
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                total_lat += ctx.graph.rate[e] * node.latency_to_ms[neighbor.current_node]
+                if neighbor.current_node == node.id:
+                    on_node += 1
+
+    others = 0
+    np = len(ctx.pods)
+    for i in range(np):
+        p = ctx.pods[i]
+        if p.current_node == node.id and p.id != pod.id:
+            others += 1
+
+    after = node.cpu_allocated + pod.cpu_request
+    util = float(after) / float(node.cpu_capacity)
+    power_after = node.power_idle_w + (node.power_max_w - node.power_idle_w) * util
+
+    active = 0.0
+    if node.cpu_allocated > 0:
+        active = 1.0
+
+    threshold = node.cpu_capacity * 9 // 10
+    over_pen = 0.0
+    if after > threshold:
+        over_pen = float(after - threshold) * 200.0
+
+    pack_bonus = float(others) * 60.0
+    affinity_bonus = float(on_node) * 70.0
+    active_bonus = active * 150.0
+    power_pen = power_after * 0.6
+
+    cost = total_lat - pack_bonus - affinity_bonus - active_bonus + over_pen + power_pen
+    return -cost
+
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0:
+        return out
+    n_nodes = len(state.nodes)
+    np = len(state.pods)
+    cpu_now: list[int] = []
+    mem_now: list[int] = []
+    for j in range(n_nodes):
+        cpu_now.append(state.nodes[j].cpu_allocated)
+        mem_now.append(state.nodes[j].mem_allocated)
+    for i in range(np):
+        pod = state.pods[i]
+        placed = pod.current_node >= 0
+        movable = placed and (not pod.stateful) and (not pod.has_pdb)
+        if movable and len(out) < budget:
+            src_id = pod.current_node
+            src_aff = affinity_to(pod.id, src_id, state, graph)
+            src_cpu_before = cpu_now[src_id]
+            src_cpu_after = src_cpu_before - pod.cpu_request
+            src_power_before = node_power(state.nodes[src_id], src_cpu_before)
+            src_power_after = node_power(state.nodes[src_id], src_cpu_after)
+            src_reduction = src_power_before - src_power_after
+            best = -1
+            best_gain = 0.0
+            for j in range(n_nodes):
+                cand = state.nodes[j]
+                distinct = j != src_id
+                cpu_ok = cpu_now[j] + pod.cpu_request <= cand.cpu_capacity
+                mem_ok = mem_now[j] + pod.mem_request <= cand.mem_capacity
+                ok = distinct and cpu_ok and mem_ok and (not cand.suspended)
+                if ok:
+                    dst_aff = affinity_to(pod.id, j, state, graph)
+                    dst_cpu_after = cpu_now[j] + pod.cpu_request
+                    dst_power_before = node_power(cand, cpu_now[j])
+                    dst_power_after = node_power(cand, dst_cpu_after)
+                    dst_increase = dst_power_after - dst_power_before
+                    energy_gain = src_reduction - dst_increase
+                    affinity_gain = dst_aff - src_aff
+                    active_gain = 0.0
+                    if cpu_now[j] > 0:
+                        active_gain = 50.0
+                    dst_threshold = cand.cpu_capacity * 9 // 10
+                    dst_over = dst_cpu_after - dst_threshold
+                    over_pen = 0.0
+                    if dst_over > 0:
+                        over_pen = float(dst_over) * 100.0
+                    total_gain = energy_gain * 3.0 + affinity_gain * 8.0 + active_gain - over_pen
+                    if total_gain > best_gain:
+                        best_gain = total_gain
+                        best = j
+            if best >= 0 and best_gain > 1.0:
+                out.append(move_pod(pod.id, best))
+                new_cpu: list[int] = []
+                new_mem: list[int] = []
+                for k in range(n_nodes):
+                    cv = cpu_now[k]
+                    mv = mem_now[k]
+                    if k == src_id:
+                        cv = cv - pod.cpu_request
+                        mv = mv - pod.mem_request
+                    if k == best:
+                        cv = cv + pod.cpu_request
+                        mv = mv + pod.mem_request
+                    new_cpu.append(cv)
+                    new_mem.append(mv)
+                cpu_now = new_cpu
+                mem_now = new_mem
+    return out
+# EVOLVE-BLOCK-END

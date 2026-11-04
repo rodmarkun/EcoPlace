@@ -1,0 +1,35 @@
+{
+  "champion": {
+    "candidate_id": "zeroshot-12",
+    "proposal_seq": 1012,
+    "search_fitness": {
+      "direction": "lower-is-better",
+      "feasible": true,
+      "infeasibility_vector": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "n_bundles": 3,
+      "n_instances": 4,
+      "normalized_energy": 0.5755019052747518,
+      "proposal_seq": 1012,
+      "sort_key": [
+        0,
+        0.5755019052747518,
+        1012
+      ],
+      "summed_primitive_shortfall": 0.0
+    },
+    "source": "# ruff: noqa: F821\n# graph_headroom \u2014 evolution seed for the dev-continuum-* family.  Identity stays\n# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.\n#\n# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the\n# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so\n# seeding from one would start every arm outside the feasible region and turn the first\n# half of every campaign into a feasibility hunt rather than a search.  This seed is the\n# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one\n# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate \u2014 the\n# search starts feasible and has an explicit, large energy gap to close rather than\n# starting at the best baseline with nowhere to go.\nPOLICY_NAME: str = \"graph_headroom\"\nPOLICY_VERSION: str = \"1.0.0\"\n\n# EVOLVE-BLOCK-START\ndef cpu_util(node: NodeState) -> float:\n    if node.cpu_capacity <= 0:\n        return 1.0\n    return float(node.cpu_allocated) / float(node.cpu_capacity)\n\ndef mem_util(node: NodeState) -> float:\n    if node.mem_capacity <= 0:\n        return 1.0\n    return float(node.mem_allocated) / float(node.mem_capacity)\n\ndef fits(pod: Pod, node: NodeState) -> bool:\n    cpu_ok = node.cpu_allocated + pod.cpu_request <= node.cpu_capacity\n    mem_ok = node.mem_allocated + pod.mem_request <= node.mem_capacity\n    return cpu_ok and mem_ok\n\ndef estimated_power(node: NodeState, pod: Pod) -> float:\n    if node.cpu_capacity <= 0:\n        return node.power_max_w\n    cpu_after = node.cpu_allocated + pod.cpu_request\n    util = float(cpu_after) / float(node.cpu_capacity)\n    return node.power_idle_w + (node.power_max_w - node.power_idle_w) * util\n\ndef score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:\n    if node.cpu_capacity <= 0 or node.mem_capacity <= 0:\n        return -1000000.0\n    cpu_after = node.cpu_allocated + pod.cpu_request\n    mem_after = node.mem_allocated + pod.mem_request\n    if cpu_after > node.cpu_capacity or mem_after > node.mem_capacity:\n        return -1000000.0\n    power = estimated_power(node, pod)\n    cu = float(cpu_after) / float(node.cpu_capacity)\n    mu = float(mem_after) / float(node.mem_capacity)\n    queue_penalty = cu * cu * 80.0 + mu * mu * 40.0\n    cost = power + queue_penalty\n    return -cost\n\ndef best_target(pod: Pod, cur_node: NodeState, state: ClusterState) -> int:\n    best_id: int = -1\n    best_power: float = 1000000.0\n    for node in state.nodes:\n        if node.id != cur_node.id and node.suspended == False:\n            if node.power_idle_w < cur_node.power_idle_w:\n                if fits(pod, node):\n                    target_util = cpu_util(node)\n                    if target_util < 0.8:\n                        power = estimated_power(node, pod)\n                        if power < best_power:\n                            best_power = power\n                            best_id = node.id\n    return best_id\n\ndef propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:\n    out: list[Move] = []\n    count: int = 0\n    if budget <= 0:\n        return out\n    for pod in state.pods:\n        if count >= budget:\n            return out\n        current = pod.current_node\n        if current >= 0:\n            if pod.stateful == False and pod.has_pdb == False:\n                cur_node = state.nodes[0]\n                for node in state.nodes:\n                    if node.id == current:\n                        cur_node = node\n                cur_util = cpu_util(cur_node)\n                if cur_util < 0.5:\n                    target = best_target(pod, cur_node, state)\n                    if target >= 0:\n                        out.append(move_pod(pod.id, target))\n                        count += 1\n    return out\n# EVOLVE-BLOCK-END\n",
+    "source_sha256": "147914e39882f4fc586c89c0f70c9e7eba1db1dacaa67805c3e9743a635985b5"
+  },
+  "promoted_to_l2": 8,
+  "proposals": 18,
+  "rule": "CandidateFitness.sort_key over initialization L2 records and zero-shot L2 records; proposal sequence tie-break; no final-grid information",
+  "sealed_at": "2026-10-06T13:22:59.963919+00:00",
+  "spent_microusd": 157142,
+  "stop": "zero-shot root API ceiling reached",
+  "valid": 15
+}

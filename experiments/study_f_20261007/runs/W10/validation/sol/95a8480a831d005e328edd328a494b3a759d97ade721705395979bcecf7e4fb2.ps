@@ -1,0 +1,136 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def resource_score(requested: int, capacity: int) -> int:
+    if capacity <= 0 or requested > capacity:
+        return 0
+    return ((capacity - requested) * 100) // capacity
+
+def same_pod_fields(left: Pod, right: Pod) -> bool:
+    return left.service == right.service and left.app == right.app and left.cpu_request == right.cpu_request and left.mem_request == right.mem_request and left.current_node == right.current_node and left.stateful == right.stateful and left.has_pdb == right.has_pdb and left.image_mb == right.image_mb
+
+def same_node_fields(left: NodeState, right: NodeState) -> bool:
+    matching = left.tier == right.tier and left.cpu_capacity == right.cpu_capacity and left.cpu_allocated == right.cpu_allocated and left.mem_capacity == right.mem_capacity and left.mem_allocated == right.mem_allocated and left.power_idle_w == right.power_idle_w and left.power_max_w == right.power_max_w and left.suspended == right.suspended and left.suspendable == right.suspendable
+    if not matching or len(left.latency_to_ms) != len(right.latency_to_ms):
+        return False
+    for i in range(len(left.latency_to_ms)):
+        if left.latency_to_ms[i] != right.latency_to_ms[i]:
+            return False
+    return True
+
+def pressure(cpu_used: int, cpu_capacity: int, mem_used: int, mem_capacity: int) -> float:
+    if cpu_capacity <= 0 or mem_capacity <= 0:
+        return 1000000000.0
+    if cpu_used > cpu_capacity or mem_used > mem_capacity:
+        return 1000000000.0
+    cpu_util = float(cpu_used) / float(cpu_capacity)
+    mem_util = float(mem_used) / float(mem_capacity)
+    cost = 30.0 * cpu_util * cpu_util / max(1.0 - cpu_util, 0.02)
+    cost = cost + 6.0 * mem_util * mem_util / max(1.0 - mem_util, 0.02)
+    cost = cost + 480.0 * max(cpu_util - 0.60, 0.0)
+    cost = cost + 2800.0 * max(cpu_util - 0.75, 0.0)
+    cost = cost + 300.0 * max(mem_util - 0.80, 0.0)
+    cost = cost + 1800.0 * max(mem_util - 0.90, 0.0)
+    return cost
+
+def pending_peer_cost(peer: Pod, pod: Pod, node_index: int, outgoing: bool, ctx: ClusterCtx) -> float:
+    best: float = 1000000000.0
+    for i in range(len(ctx.nodes)):
+        candidate = ctx.nodes[i]
+        cpu_after = candidate.cpu_allocated + peer.cpu_request
+        mem_after = candidate.mem_allocated + peer.mem_request
+        if i == node_index:
+            cpu_after = cpu_after + pod.cpu_request
+            mem_after = mem_after + pod.mem_request
+        eligible = candidate.cpu_capacity > 0 and candidate.mem_capacity > 0 and cpu_after <= candidate.cpu_capacity and mem_after <= candidate.mem_capacity
+        if eligible:
+            latency: float = 0.0
+            if i != node_index and outgoing:
+                latency = ctx.nodes[node_index].latency_to_ms[i]
+            elif i != node_index:
+                latency = candidate.latency_to_ms[node_index]
+            peer_pressure = pressure(cpu_after, candidate.cpu_capacity, mem_after, candidate.mem_capacity)
+            estimate = latency + peer_pressure / 24.0
+            best = min(best, estimate)
+    return best
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.cpu_capacity <= 0 or node.mem_capacity <= 0:
+        return -1000000000000.0
+
+    cpu_after = node.cpu_allocated + pod.cpu_request
+    mem_after = node.mem_allocated + pod.mem_request
+    if cpu_after > node.cpu_capacity or mem_after > node.mem_capacity:
+        return -1000000000000.0
+
+    pod_index: int = -1
+    node_index: int = -1
+    for i in range(len(ctx.pods)):
+        if pod_index < 0 and same_pod_fields(ctx.pods[i], pod):
+            pod_index = i
+    for i in range(len(ctx.nodes)):
+        if node_index < 0 and same_node_fields(ctx.nodes[i], node):
+            node_index = i
+
+    queue_cost = pressure(cpu_after, node.cpu_capacity, mem_after, node.mem_capacity)
+    cpu_headroom = resource_score(cpu_after, node.cpu_capacity)
+    mem_headroom = resource_score(mem_after, node.mem_capacity)
+    headroom_cost = 0.20 * float(100 - min(cpu_headroom, mem_headroom))
+
+    latency_sum: float = 0.0
+    incoming_worst: float = 0.0
+    outgoing_worst: float = 0.0
+    if pod_index >= 0 and node_index >= 0:
+        for e in range(len(ctx.graph.src)):
+            src = ctx.graph.src[e]
+            dst = ctx.graph.dst[e]
+            peer: int = -1
+            outgoing: bool = False
+            if src == pod_index and dst != pod_index:
+                peer = dst
+                outgoing = True
+            elif dst == pod_index and src != pod_index:
+                peer = src
+            if peer >= 0 and peer < len(ctx.pods):
+                peer_node = ctx.pods[peer].current_node
+                latency: float = 0.0
+                if peer_node >= 0 and peer_node < len(ctx.nodes):
+                    if peer_node != node_index and outgoing:
+                        latency = node.latency_to_ms[peer_node]
+                    elif peer_node != node_index:
+                        latency = ctx.nodes[peer_node].latency_to_ms[node_index]
+                elif peer_node == -1:
+                    latency = pending_peer_cost(ctx.pods[peer], pod, node_index, outgoing, ctx)
+                latency_sum = latency_sum + latency
+                if outgoing:
+                    outgoing_worst = max(outgoing_worst, latency)
+                else:
+                    incoming_worst = max(incoming_worst, latency)
+
+    dynamic_power = max(node.power_max_w - node.power_idle_w, 0.0)
+    incremental_power = dynamic_power * float(pod.cpu_request) / float(node.cpu_capacity)
+    if node.suspended or node.cpu_allocated == 0:
+        incremental_power = incremental_power + node.power_idle_w
+
+    critical_path_cost = 24.0 * (incoming_worst + outgoing_worst)
+    cost = queue_cost + headroom_cost + critical_path_cost + 8.0 * latency_sum
+    cost = cost + 0.12 * incremental_power
+    return -cost
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    return out
+# EVOLVE-BLOCK-END

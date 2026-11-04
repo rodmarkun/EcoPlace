@@ -1,0 +1,86 @@
+[
+ {
+  "name": "fuel_exhaustion_loop",
+  "source": "def f(n: int) -> int:\n    acc = 0\n    for i in range(n):\n        acc += 1\n    return acc\n",
+  "expect": {
+   "error": "fuel"
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 1000000
+   }
+  ],
+  "fuel": 1000
+ },
+ {
+  "name": "fuel_sufficient_same_program",
+  "source": "def f(n: int) -> int:\n    acc = 0\n    for i in range(n):\n        acc += 1\n    return acc\n",
+  "expect": {
+   "value": {
+    "I": 100
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 100
+   }
+  ],
+  "fuel": 1000
+ },
+ {
+  "name": "oom_list_growth",
+  "source": "def f(n: int) -> int:\n    xs: list[int] = []\n    for i in range(n):\n        xs.append(i)\n    return len(xs)\n",
+  "expect": {
+   "error": "oom"
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 100000
+   }
+  ],
+  "fuel": 100000000,
+  "memory_bytes": 4096
+ },
+ {
+  "name": "oom_list_display_in_loop",
+  "source": "def f(n: int) -> int:\n    acc = 0\n    for i in range(n):\n        xs = [i, i, i, i]\n        acc += xs[0]\n    return acc\n",
+  "expect": {
+   "error": "oom"
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 100000
+   }
+  ],
+  "fuel": 100000000,
+  "memory_bytes": 8192
+ },
+ {
+  "name": "move_alloc_charged",
+  "source": "def f(n: int) -> int:\n    ms: list[Move] = []\n    for i in range(n):\n        ms.append(move_pod(i, i))\n    return len(ms)\n",
+  "expect": {
+   "error": "oom"
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 100000
+   }
+  ],
+  "fuel": 100000000,
+  "memory_bytes": 8192
+ },
+ {
+  "name": "fuel_charged_before_step",
+  "source": "def f() -> int:\n    return 1\n",
+  "expect": {
+   "error": "fuel"
+  },
+  "func": "f",
+  "fuel": 1
+ }
+]

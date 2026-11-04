@@ -1,0 +1,35 @@
+{
+  "champion": {
+    "candidate_id": "zeroshot-16",
+    "proposal_seq": 1016,
+    "search_fitness": {
+      "direction": "lower-is-better",
+      "feasible": true,
+      "infeasibility_vector": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "n_bundles": 3,
+      "n_instances": 4,
+      "normalized_energy": 0.5871300792356783,
+      "proposal_seq": 1016,
+      "sort_key": [
+        0,
+        0.5871300792356783,
+        1016
+      ],
+      "summed_primitive_shortfall": 0.0
+    },
+    "source": "# ruff: noqa: F821\n# graph_headroom \u2014 evolution seed for the dev-continuum-* family.  Identity stays\n# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.\n#\n# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the\n# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so\n# seeding from one would start every arm outside the feasible region and turn the first\n# half of every campaign into a feasibility hunt rather than a search.  This seed is the\n# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one\n# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate \u2014 the\n# search starts feasible and has an explicit, large energy gap to close rather than\n# starting at the best baseline with nowhere to go.\nPOLICY_NAME: str = \"graph_headroom\"\nPOLICY_VERSION: str = \"1.0.0\"\n\n# EVOLVE-BLOCK-START\ndef marginal_power(pod: Pod, node: NodeState) -> float:\n    cap = float(max(node.cpu_capacity, 1))\n    span = max(node.power_max_w - node.power_idle_w, 0.0)\n    return span * (float(pod.cpu_request) / cap)\n\ndef idle_efficiency(node: NodeState) -> float:\n    return node.power_idle_w / float(max(node.cpu_capacity, 1))\n\ndef graph_latency(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:\n    total = 0.0\n    for edge in range(len(ctx.graph.src)):\n        source = ctx.graph.src[edge]\n        destination = ctx.graph.dst[edge]\n        other = -1\n        if source == pod.id:\n            other = destination\n        if destination == pod.id:\n            other = source\n        if other >= 0 and other != pod.id:\n            neighbor = ctx.pods[other]\n            if neighbor.current_node >= 0:\n                total += node.latency_to_ms[neighbor.current_node]\n    return total\n\ndef headroom_score(pod: Pod, node: NodeState) -> float:\n    cpu_after = node.cpu_allocated + pod.cpu_request\n    mem_after = node.mem_allocated + pod.mem_request\n    cpu_cap = max(node.cpu_capacity, 1)\n    mem_cap = max(node.mem_capacity, 1)\n    cpu_free = cpu_cap - cpu_after\n    mem_free = mem_cap - mem_after\n    if cpu_free < 0 or mem_free < 0:\n        return 0.0\n    cpu_ratio = float(cpu_free) / float(cpu_cap)\n    mem_ratio = float(mem_free) / float(mem_cap)\n    return cpu_ratio + mem_ratio\n\ndef score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:\n    cost = marginal_power(pod, node)\n    if node.suspended:\n        cost += node.power_idle_w + 5.0\n    if node.cpu_allocated == 0 and not node.suspended:\n        cost += node.power_idle_w * 0.5\n    latency = graph_latency(pod, node, ctx)\n    cost += latency * 0.01\n    cost -= headroom_score(pod, node) * 10.0\n    return -cost\n\ndef propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:\n    out: list[Move] = []\n    if budget <= 0 or len(state.nodes) < 2:\n        return out\n    drain = -1\n    drain_u = 2.0\n    for node in state.nodes:\n        if node.suspendable and not node.suspended:\n            u = float(node.cpu_allocated) / float(max(node.cpu_capacity, 1))\n            if u < drain_u and u < 0.3:\n                drain_u = u\n                drain = node.id\n    if drain < 0:\n        return out\n    target = -1\n    best = 1e18\n    moved = 0\n    for node in state.nodes:\n        if not node.suspended and node.id != drain:\n            eff = idle_efficiency(node)\n            if eff < best:\n                best = eff\n                target = node.id\n    if target < 0:\n        for node in state.nodes:\n            if node.suspended and node.id != drain:\n                eff = idle_efficiency(node)\n                if eff < best:\n                    best = eff\n                    target = node.id\n        if target < 0 or budget < 2:\n            return out\n        out.append(wake(target))\n        moved = 1\n    for pod in state.pods:\n        if moved < budget and pod.current_node == drain:\n            if not pod.stateful and not pod.has_pdb:\n                out.append(move_pod(pod.id, target))\n                moved += 1\n    return out\n# EVOLVE-BLOCK-END\n",
+    "source_sha256": "f19cbea8ee1f45fa414c9b176070f61ef47fda6be3b2f21a11fca2235c453daf"
+  },
+  "promoted_to_l2": 12,
+  "proposals": 20,
+  "rule": "CandidateFitness.sort_key over initialization L2 records and zero-shot L2 records; proposal sequence tie-break; no final-grid information",
+  "sealed_at": "2026-10-06T22:57:38.008542+00:00",
+  "spent_microusd": 153453,
+  "stop": "zero-shot root API ceiling reached",
+  "valid": 19
+}

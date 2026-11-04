@@ -1,0 +1,169 @@
+[
+ {
+  "name": "helper_call",
+  "source": "def h(a: int) -> int:\n    return a * 2\ndef f(a: int) -> int:\n    return h(a) + 1\n",
+  "expect": {
+   "value": {
+    "I": 21
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 10
+   }
+  ]
+ },
+ {
+  "name": "helper_chain",
+  "source": "def a(x: int) -> int:\n    return x + 1\ndef b(x: int) -> int:\n    return a(x) * 2\ndef f(x: int) -> int:\n    return b(a(x))\n",
+  "expect": {
+   "value": {
+    "I": 6
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 1
+   }
+  ]
+ },
+ {
+  "name": "self_recursion_type_error",
+  "source": "def f(n: int) -> int:\n    return f(n - 1)\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "recursion"
+  }
+ },
+ {
+  "name": "forward_call_type_error",
+  "source": "def f(n: int) -> int:\n    return g(n)\ndef g(n: int) -> int:\n    return n\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "recursion"
+  }
+ },
+ {
+  "name": "unknown_function",
+  "source": "def f(n: int) -> int:\n    return frobnicate(n)\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "unknown function"
+  }
+ },
+ {
+  "name": "wrong_arity",
+  "source": "def h(a: int, b: int) -> int:\n    return a + b\ndef f(a: int) -> int:\n    return h(a)\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "argument"
+  }
+ },
+ {
+  "name": "wrong_arg_type",
+  "source": "def h(a: float) -> float:\n    return a\ndef f(a: int) -> float:\n    return h(a)\n",
+  "expect": {
+   "error": "type"
+  }
+ },
+ {
+  "name": "return_type_mismatch",
+  "source": "def f(a: int) -> float:\n    return a\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "return type"
+  }
+ },
+ {
+  "name": "duplicate_function",
+  "source": "def f(a: int) -> int:\n    return a\ndef f(a: int) -> int:\n    return a\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "duplicate"
+  }
+ },
+ {
+  "name": "reserved_name_function",
+  "source": "def len(a: int) -> int:\n    return a\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "reserved"
+  }
+ },
+ {
+  "name": "record_param_field_access",
+  "source": "def f(p: Pod) -> int:\n    return p.cpu_request + p.mem_request\n",
+  "expect": {
+   "value": {
+    "I": 228
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "R": {
+     "ty": "Pod",
+     "fields": [
+      {
+       "I": 1
+      },
+      {
+       "I": 2
+      },
+      {
+       "I": 3
+      },
+      {
+       "I": 100
+      },
+      {
+       "I": 128
+      },
+      {
+       "B": false
+      },
+      {
+       "B": true
+      },
+      {
+       "I": 50
+      },
+      {
+       "I": -1
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "unknown_field_error",
+  "source": "def f(p: Pod) -> int:\n    return p.gpu_request\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "no field"
+  }
+ },
+ {
+  "name": "move_constructors",
+  "source": "def f() -> int:\n    m = move_pod(3, 4)\n    w = wake(5)\n    return m.pod * 100 + m.dest * 10 + w.kind\n",
+  "expect": {
+   "value": {
+    "I": 341
+   }
+  },
+  "func": "f"
+ },
+ {
+  "name": "wake_fields",
+  "source": "def f() -> bool:\n    w = wake(2)\n    return w.pod == -1 and w.kind == 1 and w.dest == 2\n",
+  "expect": {
+   "value": {
+    "B": true
+   }
+  },
+  "func": "f"
+ }
+]

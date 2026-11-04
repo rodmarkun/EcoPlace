@@ -1,0 +1,225 @@
+[
+ {
+  "name": "if_elif_else",
+  "source": "def f(a: int) -> int:\n    if a > 0:\n        return 1\n    elif a < 0:\n        return -1\n    else:\n        return 0\n",
+  "expect": {
+   "value": {
+    "I": -1
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": -5
+   }
+  ]
+ },
+ {
+  "name": "nested_if",
+  "source": "def f(a: int, b: int) -> int:\n    if a > 0:\n        if b > 0:\n            return 3\n        return 2\n    return 1\n",
+  "expect": {
+   "value": {
+    "I": 2
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 1
+   },
+   {
+    "I": 0
+   }
+  ]
+ },
+ {
+  "name": "for_range_one_arg",
+  "source": "def f(n: int) -> int:\n    acc = 0\n    for i in range(n):\n        acc += i\n    return acc\n",
+  "expect": {
+   "value": {
+    "I": 10
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 5
+   }
+  ]
+ },
+ {
+  "name": "for_range_two_args",
+  "source": "def f() -> int:\n    acc = 0\n    for i in range(3, 7):\n        acc += i\n    return acc\n",
+  "expect": {
+   "value": {
+    "I": 18
+   }
+  },
+  "func": "f"
+ },
+ {
+  "name": "for_range_empty_descending",
+  "source": "def f() -> int:\n    acc = 7\n    for i in range(5, 3):\n        acc += i\n    return acc\n",
+  "expect": {
+   "value": {
+    "I": 7
+   }
+  },
+  "func": "f"
+ },
+ {
+  "name": "for_list_order",
+  "source": "def f(xs: list[int]) -> int:\n    acc = 0\n    for x in xs:\n        acc = acc * 10 + x\n    return acc\n",
+  "expect": {
+   "value": {
+    "I": 123
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "L": [
+     {
+      "I": 1
+     },
+     {
+      "I": 2
+     },
+     {
+      "I": 3
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "nested_loops",
+  "source": "def f(n: int) -> int:\n    acc = 0\n    for i in range(n):\n        for j in range(i):\n            acc += 1\n    return acc\n",
+  "expect": {
+   "value": {
+    "I": 10
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 5
+   }
+  ]
+ },
+ {
+  "name": "early_return_from_loop",
+  "source": "def f(xs: list[int], t: int) -> int:\n    idx = 0\n    for x in xs:\n        if x == t:\n            return idx\n        idx += 1\n    return -1\n",
+  "expect": {
+   "value": {
+    "I": 1
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "L": [
+     {
+      "I": 5
+     },
+     {
+      "I": 8
+     },
+     {
+      "I": 2
+     }
+    ]
+   },
+   {
+    "I": 8
+   }
+  ]
+ },
+ {
+  "name": "pass_statement",
+  "source": "def f(a: int) -> int:\n    if a > 0:\n        pass\n    return a\n",
+  "expect": {
+   "value": {
+    "I": 3
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 3
+   }
+  ]
+ },
+ {
+  "name": "aug_assign_all_ops",
+  "source": "def f() -> int:\n    x = 100\n    x += 7\n    x -= 2\n    x *= 3\n    x //= 4\n    x %= 50\n    return x\n",
+  "expect": {
+   "value": {
+    "I": 28
+   }
+  },
+  "func": "f"
+ },
+ {
+  "name": "float_aug_div",
+  "source": "def f(a: float) -> float:\n    x = a\n    x /= 4.0\n    return x\n",
+  "expect": {
+   "value": {
+    "F": 2.5
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "F": 10.0
+   }
+  ]
+ },
+ {
+  "name": "loop_var_out_of_scope",
+  "source": "def f(n: int) -> int:\n    for i in range(n):\n        pass\n    return i\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "undefined"
+  }
+ },
+ {
+  "name": "loop_var_no_shadow",
+  "source": "def f(n: int) -> int:\n    i = 1\n    for i in range(n):\n        pass\n    return i\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "shadows"
+  }
+ },
+ {
+  "name": "missing_return_path",
+  "source": "def f(c: bool) -> int:\n    if c:\n        return 1\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "return"
+  }
+ },
+ {
+  "name": "use_before_assign",
+  "source": "def f(c: bool) -> int:\n    if c:\n        x = 1\n    return x\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "unassigned"
+  }
+ },
+ {
+  "name": "definite_assign_both_branches",
+  "source": "def f(c: bool) -> int:\n    if c:\n        x = 1\n    else:\n        x = 2\n    return x\n",
+  "expect": {
+   "value": {
+    "I": 2
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "B": false
+   }
+  ]
+ }
+]

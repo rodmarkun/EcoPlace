@@ -1,0 +1,87 @@
+From 97b13a7f82b287ed9686c46f6dfc404b54d2d7a7 Mon Sep 17 00:00:00 2001
+From: Pablo Rodriguez <rodmarprogrammer@gmail.com>
+Date: Tue, 21 Jul 2026 19:50:42 +0200
+Subject: [PATCH] fix(edit): require explicit async patch seed
+
+---
+ shinka/core/async_runner.py |  2 ++
+ shinka/edit/async_apply.py  |  4 +++-
+ tests/test_numeric_patch.py | 13 +++++++++++++
+ 3 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/shinka/core/async_runner.py b/shinka/core/async_runner.py
+index 2ca53b6..7e00a97 100644
+--- a/shinka/core/async_runner.py
++++ b/shinka/core/async_runner.py
+@@ -3568,6 +3568,7 @@ class ShinkaEvolveRunner:
+                     language=language_str,
+                     patch_type="full",  # Fix always uses full rewrite
+                     verbose=False,
++                    seed=None,
+                 )
+ 
+                 (
+@@ -3930,6 +3931,7 @@ class ShinkaEvolveRunner:
+                     language=language_str,
+                     patch_type=patch_type,
+                     verbose=False,
++                    seed=None,
+                 )
+ 
+                 (
+diff --git a/shinka/edit/async_apply.py b/shinka/edit/async_apply.py
+index 2258d2a..1e79c21 100644
+--- a/shinka/edit/async_apply.py
++++ b/shinka/edit/async_apply.py
+@@ -56,7 +56,8 @@ async def apply_patch_async(
+     language: str = "python",
+     patch_type: str = "diff",
+     verbose: bool = False,
+-    seed: Optional[int] = None,
++    *,
++    seed: Optional[int],
+ ) -> Tuple[
+     Optional[str], int, Optional[str], Optional[str], Optional[str], Optional[Path]
+ ]:
+@@ -69,6 +70,7 @@ async def apply_patch_async(
+         language: Programming language
+         patch_type: Type of patch (diff, full, cross, numeric)
+         verbose: Enable verbose logging
++        seed: Explicit numeric-mutation seed, or ``None`` for non-numeric patches
+ 
+     Returns:
+         Tuple of (modified_code, num_applied, output_path, error_msg, patch_txt, patch_path)
+diff --git a/tests/test_numeric_patch.py b/tests/test_numeric_patch.py
+index 1d83269..324d047 100644
+--- a/tests/test_numeric_patch.py
++++ b/tests/test_numeric_patch.py
+@@ -2,6 +2,8 @@ from __future__ import annotations
+ 
+ import asyncio
+ 
++import pytest
++
+ from shinka.core.sampler import PromptSampler
+ from shinka.database import Program
+ from shinka.edit.apply_numeric import apply_numeric_patch
+@@ -86,6 +88,17 @@ def test_apply_patch_async_dispatches_numeric_patch(tmp_path):
+     assert updated is not None and updated != PYTHON_PROGRAM
+ 
+ 
++def test_apply_patch_async_requires_explicit_seed_intent(tmp_path):
++    with pytest.raises(TypeError, match="seed"):
++        asyncio.run(
++            apply_patch_async(
++                original_str="x = 1\n",
++                patch_str="",
++                patch_dir=str(tmp_path),
++            )
++        )
++
++
+ def test_prompt_sampler_accepts_numeric_patch_type():
+     sampler = PromptSampler(
+         patch_types=["numeric"],
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,35 @@
+{
+  "champion": {
+    "candidate_id": "zeroshot-0",
+    "proposal_seq": 1000,
+    "search_fitness": {
+      "direction": "lower-is-better",
+      "feasible": true,
+      "infeasibility_vector": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "n_bundles": 3,
+      "n_instances": 4,
+      "normalized_energy": 0.8512029986013441,
+      "proposal_seq": 1000,
+      "sort_key": [
+        0,
+        0.8512029986013441,
+        1000
+      ],
+      "summed_primitive_shortfall": 0.0
+    },
+    "source": "# ruff: noqa: F821\n# graph_headroom \u2014 evolution seed for the dev-continuum-* family.  Identity stays\n# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.\n#\n# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the\n# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so\n# seeding from one would start every arm outside the feasible region and turn the first\n# half of every campaign into a feasibility hunt rather than a search.  This seed is the\n# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one\n# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate \u2014 the\n# search starts feasible and has an explicit, large energy gap to close rather than\n# starting at the best baseline with nowhere to go.\nPOLICY_NAME: str = \"graph_headroom\"\nPOLICY_VERSION: str = \"1.0.0\"\n\n# EVOLVE-BLOCK-START\ndef score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:\n    if node.suspended:\n        return -100000.0\n    cpu_after = node.cpu_allocated + pod.cpu_request\n    mem_after = node.mem_allocated + pod.mem_request\n    cpu_util = 0.0\n    if node.cpu_capacity > 0:\n        cpu_util = float(cpu_after) / float(node.cpu_capacity)\n    mem_util = 0.0\n    if node.mem_capacity > 0:\n        mem_util = float(mem_after) / float(node.mem_capacity)\n    util_pen = cpu_util * cpu_util * 150.0 + mem_util * mem_util * 150.0\n    lat = 0.0\n    n = len(ctx.graph.src)\n    for e in range(n):\n        s = ctx.graph.src[e]\n        d = ctx.graph.dst[e]\n        other = -1\n        if s == pod.id:\n            other = d\n        if d == pod.id:\n            other = s\n        if other >= 0 and other != pod.id:\n            nb = ctx.pods[other]\n            if nb.current_node >= 0:\n                lat += node.latency_to_ms[nb.current_node]\n    lat_pen = lat * 0.5\n    active_bonus = 0.0\n    if node.cpu_allocated > 0:\n        active_bonus = -20.0\n    return -(util_pen + lat_pen + active_bonus)\n\ndef propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:\n    out: list[Move] = []\n    if budget <= 0:\n        return out\n    moved = 0\n    n = len(graph.src)\n    for e in range(n):\n        if moved < budget and graph.rate[e] > 0.0:\n            src_pod = state.pods[graph.src[e]]\n            dst_pod = state.pods[graph.dst[e]]\n            both_placed = src_pod.current_node >= 0 and dst_pod.current_node >= 0\n            separated = both_placed and src_pod.current_node != dst_pod.current_node\n            movable = (not src_pod.stateful) and (not src_pod.has_pdb)\n            if separated and movable:\n                target = state.nodes[dst_pod.current_node]\n                cpu_ok = target.cpu_allocated + src_pod.cpu_request <= target.cpu_capacity\n                mem_ok = target.mem_allocated + src_pod.mem_request <= target.mem_capacity\n                if (not target.suspended) and cpu_ok and mem_ok:\n                    out.append(move_pod(src_pod.id, dst_pod.current_node))\n                    moved += 1\n    return out\n# EVOLVE-BLOCK-END\n",
+    "source_sha256": "97119ea2a12519a4e4f863b98d219182d98cfbe0bb835fac54dee5eb26bc6ba3"
+  },
+  "promoted_to_l2": 6,
+  "proposals": 14,
+  "rule": "CandidateFitness.sort_key over initialization L2 records and zero-shot L2 records; proposal sequence tie-break; no final-grid information",
+  "sealed_at": "2026-10-06T10:01:56.753920+00:00",
+  "spent_microusd": 154938,
+  "stop": "zero-shot root API ceiling reached",
+  "valid": 13
+}

@@ -1,0 +1,35 @@
+{
+  "champion": {
+    "candidate_id": "zeroshot-2",
+    "proposal_seq": 1002,
+    "search_fitness": {
+      "direction": "lower-is-better",
+      "feasible": true,
+      "infeasibility_vector": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "n_bundles": 3,
+      "n_instances": 4,
+      "normalized_energy": 1.3818086216959264,
+      "proposal_seq": 1002,
+      "sort_key": [
+        0,
+        1.3818086216959264,
+        1002
+      ],
+      "summed_primitive_shortfall": 0.0
+    },
+    "source": "# ruff: noqa: F821\n# graph_headroom \u2014 evolution seed for the dev-continuum-* family.  Identity stays\n# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.\n#\n# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the\n# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so\n# seeding from one would start every arm outside the feasible region and turn the first\n# half of every campaign into a feasibility hunt rather than a search.  This seed is the\n# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one\n# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate \u2014 the\n# search starts feasible and has an explicit, large energy gap to close rather than\n# starting at the best baseline with nowhere to go.\nPOLICY_NAME: str = \"graph_headroom\"\nPOLICY_VERSION: str = \"1.0.0\"\n\n# EVOLVE-BLOCK-START\ndef contains(lst: list[int], value: int) -> bool:\n    for i in range(len(lst)):\n        if lst[i] == value:\n            return True\n    return False\n\ndef has_headroom(pod: Pod, node: NodeState) -> bool:\n    cpu_cap = float(max(node.cpu_capacity, 1))\n    mem_cap = float(max(node.mem_capacity, 1))\n    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap\n    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap\n    peak = max(cpu_after, mem_after)\n    return peak < 0.65\n\ndef node_score(pod: Pod, node: NodeState, pods: list[Pod], graph: CallGraphCtx) -> float:\n    if node.suspended:\n        return -1000000.0\n    cpu_cap = float(max(node.cpu_capacity, 1))\n    mem_cap = float(max(node.mem_capacity, 1))\n    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap\n    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap\n    peak = max(cpu_after, mem_after)\n    if peak > 1.0:\n        return -1000000.0\n    headroom = 1.0 - peak\n    headroom_score = headroom * headroom\n    weighted = 0.0\n    weight = 0.0\n    max_latency = 0.0\n    edges = len(graph.src)\n    for e in range(edges):\n        source = graph.src[e]\n        destination = graph.dst[e]\n        other = -1\n        if source == pod.id:\n            other = destination\n        if destination == pod.id:\n            other = source\n        if other >= 0 and other != pod.id:\n            neighbor = pods[other]\n            if neighbor.current_node >= 0:\n                rate = graph.rate[e]\n                latency = node.latency_to_ms[neighbor.current_node]\n                weighted = weighted + rate * latency\n                weight = weight + rate\n                if latency > max_latency:\n                    max_latency = latency\n    proximity = 0.5\n    if weight > 0.0:\n        mean = weighted / weight\n        proximity = 1.0 - min(mean / 45.0, 1.0)\n        timeout_penalty = 1.0 - min(max_latency / 120.0, 1.0)\n        proximity = proximity * 0.7 + timeout_penalty * 0.3\n    efficiency = 1.0 - min(node.power_idle_w / 120.0, 1.0)\n    return headroom_score * 0.65 + proximity * 0.25 + efficiency * 0.10\n\ndef score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:\n    return node_score(pod, node, ctx.pods, ctx.graph)\n\ndef propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:\n    out: list[Move] = []\n    if budget <= 0:\n        return out\n    moved = 0\n    used_targets: list[int] = []\n    moved_pods: list[int] = []\n    edges = len(graph.src)\n    for e in range(edges):\n        source_pod = state.pods[graph.src[e]]\n        dest_pod = state.pods[graph.dst[e]]\n        if moved < budget and source_pod.current_node >= 0 and dest_pod.current_node >= 0 and source_pod.current_node != dest_pod.current_node:\n            source_node = state.nodes[source_pod.current_node]\n            dest_node = state.nodes[dest_pod.current_node]\n            source_movable = not source_pod.stateful and not source_pod.has_pdb and not contains(moved_pods, source_pod.id)\n            target_ok = not dest_node.suspended and not contains(used_targets, dest_pod.current_node)\n            if source_movable and target_ok:\n                q_current = node_score(source_pod, source_node, state.pods, graph)\n                q_target = node_score(source_pod, dest_node, state.pods, graph)\n                if q_target > q_current + 0.01 and has_headroom(source_pod, dest_node):\n                    out.append(move_pod(source_pod.id, dest_pod.current_node))\n                    moved = moved + 1\n                    used_targets.append(dest_pod.current_node)\n                    moved_pods.append(source_pod.id)\n            dest_movable = not dest_pod.stateful and not dest_pod.has_pdb and not contains(moved_pods, dest_pod.id)\n            target_ok_d = not source_node.suspended and not contains(used_targets, source_pod.current_node)\n            if moved < budget and dest_movable and target_ok_d:\n                q_current_d = node_score(dest_pod, dest_node, state.pods, graph)\n                q_target_d = node_score(dest_pod, source_node, state.pods, graph)\n                if q_target_d > q_current_d + 0.01 and has_headroom(dest_pod, source_node):\n                    out.append(move_pod(dest_pod.id, source_pod.current_node))\n                    moved = moved + 1\n                    used_targets.append(source_pod.current_node)\n                    moved_pods.append(dest_pod.id)\n    return out\n# EVOLVE-BLOCK-END\n",
+    "source_sha256": "e72f2501d54bf5fd83f314aef6d729797a8dc258ec7fd8e52e18b03b5dba529f"
+  },
+  "promoted_to_l2": 9,
+  "proposals": 20,
+  "rule": "CandidateFitness.sort_key over initialization L2 records and zero-shot L2 records; proposal sequence tie-break; no final-grid information",
+  "sealed_at": "2026-10-05T15:06:37.168215+00:00",
+  "spent_microusd": 159292,
+  "stop": "zero-shot root API ceiling reached",
+  "valid": 19
+}

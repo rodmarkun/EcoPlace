@@ -1,0 +1,90 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evolved-continuum"
+version = "0.0.1"
+description = "Self-evolving, energy/QoS-aware microservice placement for the cloud-edge continuum (FGCS SI submission)"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    # Evolution engine — editable sibling checkout (see [tool.uv.sources]).
+    # Pip-compatible fallback: pip install -e ../ShinkaEvolve
+    "shinka-evolve",
+    # GP baselines (TODO 5.2/7.3)
+    "deap>=1.4,<2",
+    # Property-based risk gates (TODO 1.6) and library tests
+    "hypothesis>=6.100,<7",
+    # Tracking store parquet backend (TODO 0.5)
+    "pyarrow>=17,<22",
+    "numpy>=1.26",
+    # DES core (TODO 2.1–2.7; plan §3.4 states the SimPy choice)
+    "simpy>=4.1,<5",
+    # Stratified GSA harness (TODO 3.5; plan §4.2): within-stratum Morris + Sobol
+    "salib>=1.5,<2",
+]
+
+[project.optional-dependencies]
+# PPO baseline (TODO 7.4). Heavy (pulls torch) — install with: uv sync --extra rl
+rl = [
+    "sb3-contrib>=2.3,<3",
+    "stable-baselines3>=2.3,<3",
+]
+# Contextual MILP oracle (TODO 7.7): HiGHS replaces Gurobi per the plan-v2.5 TODO
+# rewrite (0.2) — no commercial-license dependency. scripts/check_gurobi.py is void.
+milp = ["highspy>=1.7,<2"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<9",
+    "ruff>=0.6",
+    # Builds the placementscript wheel (runtime/crates/placementscript-py, TODO 1.3):
+    #   uv run maturin develop --release -m runtime/crates/placementscript-py/Cargo.toml
+    "maturin>=1.14,<2",
+]
+
+# EdgeSimPy is NOT a dependency and will NOT be vendored: the fork was dropped by plan
+# v2.5 §3.4 in favor of the purpose-built SimPy DES under sim/ (sim/VENDORING.md is void).
+
+[tool.uv]
+# The environment is created with a pinned interpreter (stable-baselines3/torch lag CPython):
+#   uv venv --python 3.12
+required-version = ">=0.5"
+
+[tool.uv.sources]
+# Reproducible Phase-5 fork pin: the sibling checkout must match
+# evolution/shinkaevolve.lock.json. Until the fork commit is pushed, CI checks out the
+# recorded public base and applies the hash-pinned format-patch, then verifies the exact
+# resulting Git tree. The local sibling is committed at the recorded fork commit.
+shinka-evolve = { path = "../ShinkaEvolve", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["analysis", "baselines", "evolution", "sim"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = [
+    "data", "experiments/holdout",
+    # Exact-byte evidence copies of historical one-off drivers. Do not reformat
+    # them: their bytes are bound by retained run/source manifests. Live code,
+    # diagnostic implementations and tests remain linted.
+    "experiments/quality_20260909/python-current_20260909/driver.py",
+    "experiments/validation_20260909/fit_diagnostics_20260909/guard-failed.py",
+    "experiments/validation_20260909/fit_diagnostics_20260909_v2/guard.py",
+]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",  # pycodestyle/pyflakes
+    "I",            # isort
+    "B",            # bugbear
+    "UP",           # pyupgrade
+    "DTZ",          # naive-datetime bans (supports the no-wall-clock-defaults rule)
+]

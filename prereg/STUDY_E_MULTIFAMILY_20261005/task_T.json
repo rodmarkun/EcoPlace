@@ -1,0 +1,116 @@
+{
+  "boundary_bounds": {
+    "max_transitions_per_node": 64,
+    "network_bytes_bound": 10737418240
+  },
+  "boundary_weights": {
+    "cloud": 1,
+    "device": 1,
+    "network": 1
+  },
+  "constraints": {
+    "disruption_caps": {
+      "bytes_mb": 1536,
+      "moves": 40,
+      "unavailability_s": 180
+    },
+    "drop_cap": 0.05,
+    "goodput_target": 0.9,
+    "slo_targets": {
+      "ali-trace-0": 0.88,
+      "ali-trace-1": 0.88,
+      "ali-trace-2": 0.88
+    },
+    "timeout_cap": 0.05,
+    "zero_cap_scales": {}
+  },
+  "data_role": "development-only",
+  "development_bundle_ids": [
+    "dev-1",
+    "dev-2",
+    "dev-3"
+  ],
+  "feedback_profiles": {
+    "e5-text-feedback-off": {
+      "enabled": false
+    },
+    "e5-text-feedback-on": {
+      "enabled": true
+    },
+    "matched-llm-vs-gp": {
+      "enabled": false
+    }
+  },
+  "islands": {
+    "archive_criteria": {
+      "decision_latency_scale_us": 10,
+      "decision_latency_soft_us": 25,
+      "decision_latency_weight": 1,
+      "loc_scale": 16,
+      "loc_soft_limit": 48,
+      "loc_weight": 1
+    },
+    "decision_latency_calibration": {
+      "calibration_id": "development-provisional-fuel-calibration-v1",
+      "intercept_us": 1,
+      "status": "development-provisional",
+      "us_per_fuel": 0.01
+    },
+    "elite_view_selection": "feasibility-complexity-fitness",
+    "profiles": [
+      {
+        "disruption_cap_multiplier": 1,
+        "drop_cap_multiplier": 1,
+        "goodput_target_multiplier": 1,
+        "island_id": "balanced",
+        "slo_target_multiplier": 1,
+        "timeout_cap_multiplier": 1
+      },
+      {
+        "disruption_cap_multiplier": 1,
+        "drop_cap_multiplier": 0.75,
+        "goodput_target_multiplier": 1.05,
+        "island_id": "qos-tight",
+        "slo_target_multiplier": 1.05,
+        "timeout_cap_multiplier": 0.75
+      }
+    ],
+    "survivor_selection": "phase3-lexicographic"
+  },
+  "ladder": {
+    "audit_root_seed": 32452843,
+    "budget_registration": {
+      "source": "Quarantined discrimination-first scenario measurements; never acceptance or confirmatory evidence. L0 runs as validity-only (plan 3.3: L0 demotes to a validity filter if it cannot rank): its analytical snapshot replay estimates end-to-end latency without the queueing dynamics that decide feasibility on this family, so under the retightened SLO it marks every candidate infeasible and cannot rank. L1 keeps the full 420 s horizon on one seed and one bundle because a truncated horizon would sit inside the published 182 s fog wake latency and model a different regime from L2. L2 runs one scenario seed x three bundles per EVAL_NOISE.md (the fixed-work optimum); finalists are re-scored on a fresh multi-seed grid rather than the selection grid. L1 rejects candidates whose summed primitive shortfall exceeds 1.0, which drops the catastrophically infeasible shapes (most_allocated-like, summed shortfall > 3) before they buy a full L2 while keeping near-boundary candidates rankable; the ladder epsilon-audit re-checks a 0.1 fraction.",
+      "status": "development-provisional"
+    },
+    "epsilon_audit_fraction": 0.1,
+    "l0": {
+      "max_mean_normalized_energy": 10,
+      "mode": "validity-only"
+    },
+    "l1": {
+      "bundle_ids": [
+        "dev-1"
+      ],
+      "horizon_s": 420,
+      "max_normalized_energy": 10,
+      "max_summed_primitive_shortfall": 1.0,
+      "scenario_ids": [
+        "dev-continuum-tight"
+      ],
+      "seeds_per_scenario": 1
+    }
+  },
+  "scenarios": [
+    {
+      "id": "dev-continuum-tight",
+      "path": "sim/scenarios/dev/continuum_tight.json",
+      "seeds": [
+        7643173935011564530
+      ]
+    }
+  ],
+  "schema": "evolved-continuum-task-v1",
+  "task_variant": "dev-continuum-tight",
+  "task_variant_note": "Study E family T: Study C task with scenario dev-continuum-tight; scenario seeds are campaign-derived at run time."
+}

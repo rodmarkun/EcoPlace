@@ -1,0 +1,129 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def proximity_of(mean_latency_ms: float) -> float:
+    scaled = mean_latency_ms / 30.0
+    return 1.0 - min(scaled, 1.0)
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap
+    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap
+    peak = max(cpu_after, mem_after)
+    if peak > 1.0:
+        return -1000000.0
+
+    # Queueing pressure grows sharply with utilization; squaring the margin
+    # makes the scorer prefer genuinely relaxed nodes over merely feasible ones.
+    margin = 1.0 - peak
+    headroom = margin * margin
+
+    # Rate-weighted mean and worst-case latency to already-placed call-graph
+    # neighbours.  The worst case matters for timeout-prone critical paths.
+    weighted = 0.0
+    weight = 0.0
+    worst = 0.0
+    edges = len(ctx.graph.src)
+    for e in range(edges):
+        source = ctx.graph.src[e]
+        destination = ctx.graph.dst[e]
+        other = -1
+        if source == pod.id:
+            other = destination
+        if destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                rate = ctx.graph.rate[e]
+                latency = node.latency_to_ms[neighbor.current_node]
+                weighted = weighted + rate * latency
+                weight = weight + rate
+                if latency > worst:
+                    worst = latency
+
+    # A pod with no placed neighbours yet gets a neutral 0.5 rather than a free 1.0:
+    # rewarding "no neighbours" would bias the very first replica of every service.
+    proximity = 0.5
+    if weight > 0.0:
+        mean_lat = weighted / weight
+        mean_prox = proximity_of(mean_lat)
+        worst_prox = 1.0 - min(worst / 35.0, 1.0)
+        proximity = 0.5 * mean_prox + 0.5 * worst_prox
+
+    # Expected power at the post-placement utilization: idle plus dynamic draw.
+    expected_power = node.power_idle_w + (node.power_max_w - node.power_idle_w) * peak
+    efficiency = 1.0 - min(expected_power / 200.0, 1.0)
+    return headroom * 0.35 + proximity * 0.50 + efficiency * 0.15
+
+def pod_latency_at(pod_id: int, node_id: int, state: ClusterState, graph: CallGraphCtx) -> float:
+    total = 0.0
+    edges = len(graph.src)
+    for e in range(edges):
+        source = graph.src[e]
+        destination = graph.dst[e]
+        other = -1
+        if source == pod_id:
+            other = destination
+        if destination == pod_id:
+            other = source
+        if other >= 0 and other != pod_id:
+            neighbor = state.pods[other]
+            if neighbor.current_node >= 0:
+                rate = graph.rate[e]
+                latency = state.nodes[node_id].latency_to_ms[neighbor.current_node]
+                total = total + rate * latency
+    return total
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0:
+        return out
+    moved = 0
+    num_pods = len(state.pods)
+    num_nodes = len(state.nodes)
+    for i in range(num_pods):
+        if moved >= budget:
+            return out
+        pod = state.pods[i]
+        movable = pod.current_node >= 0 and not pod.stateful and not pod.has_pdb
+        if movable:
+            current_lat = pod_latency_at(pod.id, pod.current_node, state, graph)
+            best_node = -1
+            best_gain = 0.0
+            for j in range(num_nodes):
+                node = state.nodes[j]
+                eligible = j != pod.current_node and not node.suspended
+                if eligible:
+                    cpu_cap = float(max(node.cpu_capacity, 1))
+                    mem_cap = float(max(node.mem_capacity, 1))
+                    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap
+                    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap
+                    peak_after = max(cpu_after, mem_after)
+                    if peak_after < 0.70:
+                        new_lat = pod_latency_at(pod.id, j, state, graph)
+                        gain = current_lat - new_lat
+                        if gain > best_gain:
+                            best_gain = gain
+                            best_node = j
+            if best_node >= 0 and best_gain > 1.0:
+                out.append(move_pod(pod.id, best_node))
+                moved = moved + 1
+    return out
+# EVOLVE-BLOCK-END

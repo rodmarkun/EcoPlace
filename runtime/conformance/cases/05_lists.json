@@ -1,0 +1,212 @@
+[
+ {
+  "name": "list_display_and_index",
+  "source": "def f() -> int:\n    xs = [10, 20, 30]\n    return xs[1]\n",
+  "expect": {
+   "value": {
+    "I": 20
+   }
+  },
+  "func": "f"
+ },
+ {
+  "name": "list_len",
+  "source": "def f(xs: list[float]) -> int:\n    return len(xs)\n",
+  "expect": {
+   "value": {
+    "I": 2
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "L": [
+     {
+      "F": 1.0
+     },
+     {
+      "F": 2.0
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "empty_list_needs_annotation",
+  "source": "def f() -> int:\n    xs = []\n    return len(xs)\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "empty list"
+  }
+ },
+ {
+  "name": "empty_list_with_annotation",
+  "source": "def f() -> int:\n    xs: list[int] = []\n    return len(xs)\n",
+  "expect": {
+   "value": {
+    "I": 0
+   }
+  },
+  "func": "f"
+ },
+ {
+  "name": "append_grows",
+  "source": "def f(n: int) -> int:\n    xs: list[int] = []\n    for i in range(n):\n        xs.append(i * i)\n    return xs[n - 1]\n",
+  "expect": {
+   "value": {
+    "I": 25
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 6
+   }
+  ]
+ },
+ {
+  "name": "index_oob_trap",
+  "source": "def f(xs: list[int]) -> int:\n    return xs[3]\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "out of bounds"
+  },
+  "func": "f",
+  "args": [
+   {
+    "L": [
+     {
+      "I": 1
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "negative_index_trap",
+  "source": "def f(xs: list[int]) -> int:\n    return xs[-1]\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "out of bounds"
+  },
+  "func": "f",
+  "args": [
+   {
+    "L": [
+     {
+      "I": 1
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "mutation_during_iteration_trap",
+  "source": "def f(n: int) -> int:\n    xs: list[int] = []\n    xs.append(n)\n    for x in xs:\n        xs.append(x)\n    return 0\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "mutated during iteration"
+  },
+  "func": "f",
+  "args": [
+   {
+    "I": 1
+   }
+  ]
+ },
+ {
+  "name": "heterogeneous_list_error",
+  "source": "def f() -> int:\n    xs = [1, 2.0]\n    return len(xs)\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "share one type"
+  }
+ },
+ {
+  "name": "append_wrong_type",
+  "source": "def f() -> int:\n    xs: list[int] = []\n    xs.append(1.5)\n    return len(xs)\n",
+  "expect": {
+   "error": "type",
+   "message_contains": "append"
+  }
+ },
+ {
+  "name": "nested_lists",
+  "source": "def f(xs: list[list[int]]) -> int:\n    return xs[1][0]\n",
+  "expect": {
+   "value": {
+    "I": 9
+   }
+  },
+  "func": "f",
+  "args": [
+   {
+    "L": [
+     {
+      "L": [
+       {
+        "I": 1
+       }
+      ]
+     },
+     {
+      "L": [
+       {
+        "I": 9
+       },
+       {
+        "I": 8
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "list_aliasing_append_visible",
+  "source": "def f() -> int:\n    xs: list[int] = []\n    ys = xs\n    ys.append(4)\n    return xs[0]\n",
+  "expect": {
+   "value": {
+    "I": 4
+   }
+  },
+  "func": "f"
+ },
+ {
+  "name": "append_to_host_list_traps",
+  "source": "def f(xs: list[int]) -> int:\n    xs.append(1)\n    return len(xs)\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "host-provided"
+  },
+  "func": "f",
+  "args": [
+   {
+    "L": [
+     {
+      "I": 1
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "append_to_host_list_via_alias_traps",
+  "source": "def f(xs: list[int]) -> int:\n    ys = xs\n    ys.append(1)\n    return len(ys)\n",
+  "expect": {
+   "error": "trap",
+   "message_contains": "host-provided"
+  },
+  "func": "f",
+  "args": [
+   {
+    "L": [
+     {
+      "I": 2
+     }
+    ]
+   }
+  ]
+ }
+]

@@ -1,0 +1,161 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def proximity_of(mean_latency_ms: float) -> float:
+    scaled = mean_latency_ms / 45.0
+    return 1.0 - min(scaled, 1.0)
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap
+    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap
+    peak = max(cpu_after, mem_after)
+    if peak > 1.0:
+        return -1000000.0
+
+    weighted = 0.0
+    weight = 0.0
+    worst_latency = 0.0
+    edges = len(ctx.graph.src)
+    for e in range(edges):
+        source = ctx.graph.src[e]
+        destination = ctx.graph.dst[e]
+        other = -1
+        if source == pod.id:
+            other = destination
+        if destination == pod.id:
+            other = source
+        if other >= 0 and other != pod.id:
+            neighbor = ctx.pods[other]
+            if neighbor.current_node >= 0:
+                rate = max(ctx.graph.rate[e], 0.0)
+                latency = node.latency_to_ms[neighbor.current_node]
+                if neighbor.current_node == node.id:
+                    latency = 0.0
+                weighted = weighted + rate * latency
+                weight = weight + rate
+                if rate > 0.0:
+                    worst_latency = max(worst_latency, latency)
+
+    latency_cost = 0.5
+    if weight > 0.0:
+        mean_latency = weighted / weight
+        latency_cost = 1.0 - proximity_of(mean_latency)
+        latency_cost = latency_cost + max(mean_latency - 45.0, 0.0) / 45.0
+    tail_cost = worst_latency / 90.0
+
+    # Preserve queueing margin while allowing low-load consolidation.
+    pressure = max(peak - 0.65, 0.0)
+    queue_cost = peak * 0.15 + pressure * pressure * 5.0
+
+    # Charge dynamic power and the idle draw of activating an empty node.
+    dynamic_range = max(node.power_max_w - node.power_idle_w, 0.0)
+    marginal_power = dynamic_range * float(pod.cpu_request) / cpu_cap
+    idle_share = node.power_idle_w * float(pod.cpu_request) / cpu_cap
+    activation = 0.0
+    if node.suspendable and node.cpu_allocated == 0 and node.mem_allocated == 0:
+        activation = node.power_idle_w
+    energy_cost = (marginal_power + idle_share + activation) / 120.0
+
+    cost = latency_cost * 0.55 + tail_cost * 0.10
+    cost = cost + queue_cost + energy_cost * 0.25
+    return -cost
+
+def preserves_links(pod: Pod, target_id: int, state: ClusterState, graph: CallGraphCtx) -> bool:
+    source_node = state.nodes[pod.current_node]
+    target_node = state.nodes[target_id]
+    edges = len(graph.src)
+    for e in range(edges):
+        other = -1
+        if graph.src[e] == pod.id:
+            other = graph.dst[e]
+        if graph.dst[e] == pod.id:
+            other = graph.src[e]
+        if other >= 0 and other != pod.id and graph.rate[e] > 0.0:
+            neighbor_node = state.pods[other].current_node
+            if neighbor_node >= 0:
+                before = source_node.latency_to_ms[neighbor_node]
+                after = target_node.latency_to_ms[neighbor_node]
+                if neighbor_node == pod.current_node:
+                    before = 0.0
+                if neighbor_node == target_id:
+                    after = 0.0
+                if after > before:
+                    return False
+    return True
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    if budget <= 0:
+        return out
+
+    # One small evacuation per window avoids duplicate and interacting moves.
+    for p in range(len(state.pods)):
+        pod = state.pods[p]
+        eligible = (
+            pod.current_node >= 0
+            and not pod.stateful
+            and not pod.has_pdb
+            and pod.image_mb <= 128
+        )
+        if eligible:
+            source = state.nodes[pod.current_node]
+            evacuates = (
+                source.suspendable
+                and not source.suspended
+                and source.cpu_allocated == pod.cpu_request
+                and source.mem_allocated == pod.mem_request
+            )
+            if evacuates:
+                source_cap = float(max(source.cpu_capacity, 1))
+                source_range = max(source.power_max_w - source.power_idle_w, 0.0)
+                source_power = source.power_idle_w
+                source_power = source_power + source_range * float(pod.cpu_request) / source_cap
+                best_target = -1
+                best_saving = 0.0
+                for n in range(len(state.nodes)):
+                    target = state.nodes[n]
+                    candidate = (
+                        n != pod.current_node
+                        and not target.suspended
+                        and target.cpu_allocated > 0
+                    )
+                    if candidate:
+                        cpu_cap = float(max(target.cpu_capacity, 1))
+                        mem_cap = float(max(target.mem_capacity, 1))
+                        cpu_after = float(target.cpu_allocated + pod.cpu_request) / cpu_cap
+                        mem_after = float(target.mem_allocated + pod.mem_request) / mem_cap
+                        target_range = max(target.power_max_w - target.power_idle_w, 0.0)
+                        added_power = target_range * float(pod.cpu_request) / cpu_cap
+                        saving = source_power - added_power
+                        useful = (
+                            max(cpu_after, mem_after) < 0.65
+                            and saving > best_saving
+                            and saving > 5.0
+                        )
+                        if useful:
+                            links_safe = preserves_links(pod, n, state, graph)
+                            if links_safe:
+                                best_target = n
+                                best_saving = saving
+                if best_target >= 0:
+                    out.append(move_pod(pod.id, best_target))
+                    return out
+    return out
+# EVOLVE-BLOCK-END

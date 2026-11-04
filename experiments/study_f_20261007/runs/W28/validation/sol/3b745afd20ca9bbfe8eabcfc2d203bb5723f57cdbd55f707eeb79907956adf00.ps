@@ -1,0 +1,152 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def queue_pressure(peak: float) -> float:
+    return peak / max(1.0 - peak, 0.025)
+
+def link_risk(latency: float, peer_peak: float) -> float:
+    path = latency / 45.0
+    pressure = queue_pressure(peer_peak)
+    return (
+        path * (1.0 + 0.25 * pressure)
+        + 0.15 * pressure
+        + max(peer_peak - 0.65, 0.0) * 12.0
+    )
+
+def dependency_cost(
+    pod: Pod,
+    node: NodeState,
+    neighbor: Pod,
+    ctx: ClusterCtx
+) -> float:
+    if neighbor.current_node >= 0:
+        peer = ctx.nodes[neighbor.current_node]
+        peer_cpu_used = peer.cpu_allocated
+        peer_mem_used = peer.mem_allocated
+        latency = node.latency_to_ms[neighbor.current_node]
+        # Zero-distance peers share the candidate's placement pressure.
+        if latency == 0.0:
+            peer_cpu_used = peer_cpu_used + pod.cpu_request
+            peer_mem_used = peer_mem_used + pod.mem_request
+        peer_cpu = float(peer_cpu_used) / float(max(peer.cpu_capacity, 1))
+        peer_mem = float(peer_mem_used) / float(max(peer.mem_capacity, 1))
+        return link_risk(latency, max(peer_cpu, peer_mem))
+
+    best = 1000000.0
+    for t in range(len(ctx.nodes)):
+        peer = ctx.nodes[t]
+        cpu_used = peer.cpu_allocated + neighbor.cpu_request
+        mem_used = peer.mem_allocated + neighbor.mem_request
+        latency = node.latency_to_ms[t]
+        # An unplaced dependency cannot reuse capacity reserved for this pod.
+        if latency == 0.0:
+            cpu_used = cpu_used + pod.cpu_request
+            mem_used = mem_used + pod.mem_request
+        peer_cpu = float(cpu_used) / float(max(peer.cpu_capacity, 1))
+        peer_mem = float(mem_used) / float(max(peer.mem_capacity, 1))
+        peer_peak = max(peer_cpu, peer_mem)
+        if not peer.suspended and peer_peak <= 1.0:
+            candidate = (
+                link_risk(latency, peer_peak)
+                + max(peer_peak - 0.45, 0.0) * 2.0
+            )
+            best = min(best, candidate)
+    if best == 1000000.0:
+        return 100.0
+    return best
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_after = float(node.cpu_allocated + pod.cpu_request) / cpu_cap
+    mem_after = float(node.mem_allocated + pod.mem_request) / mem_cap
+    peak = max(cpu_after, mem_after)
+    if peak > 1.0:
+        return -1000000.0
+
+    pressure = queue_pressure(peak)
+    weighted_risk = 0.0
+    weight = 0.0
+    worst_risk = 0.0
+    incoming_risk = 0.0
+    outgoing_risk = 0.0
+    for e in range(len(ctx.graph.src)):
+        other = -1
+        if ctx.graph.src[e] == pod.id:
+            other = ctx.graph.dst[e]
+        if ctx.graph.dst[e] == pod.id:
+            other = ctx.graph.src[e]
+        if other >= 0 and other != pod.id and ctx.graph.rate[e] > 0.0:
+            risk = dependency_cost(pod, node, ctx.pods[other], ctx)
+            rate = ctx.graph.rate[e]
+            weighted_risk = weighted_risk + rate * risk
+            weight = weight + rate
+            worst_risk = max(worst_risk, risk)
+            if ctx.graph.dst[e] == pod.id:
+                incoming_risk = max(incoming_risk, risk)
+            if ctx.graph.src[e] == pod.id:
+                outgoing_risk = max(outgoing_risk, risk)
+
+    mean_risk = 0.0
+    if weight > 0.0:
+        mean_risk = weighted_risk / weight
+
+    # Preserve low-rate critical dependencies and both sides of a service hop.
+    through_risk = incoming_risk + outgoing_risk
+    path_cost = (
+        mean_risk
+        + worst_risk
+        + worst_risk * worst_risk
+        + max(through_risk - worst_risk, 0.0) * 0.40
+    )
+    burst_cost = max(peak - 0.45, 0.0)
+    overload_cost = max(peak - 0.65, 0.0)
+    interaction = pressure * worst_risk
+
+    cpu_share = float(pod.cpu_request) / cpu_cap
+    dynamic_power = max(node.power_max_w - node.power_idle_w, 0.0)
+    activation_power = 0.0
+    if node.suspendable and node.cpu_allocated == 0 and node.mem_allocated == 0:
+        activation_power = node.power_idle_w
+    energy_cost = (dynamic_power * cpu_share + activation_power) / 120.0
+
+    # Energy preference fades as queueing or dependency margins deteriorate.
+    energy_weight = 0.65 / (
+        1.0
+        + pressure * 0.50
+        + worst_risk * worst_risk
+        + overload_cost * 20.0
+    )
+    cost = (
+        peak * 0.50
+        + pressure * 1.25
+        + burst_cost * 16.0
+        + overload_cost * 55.0
+        + path_cost * 3.40
+        + interaction * 0.95
+        + min(max(energy_cost, 0.0), 10.0) * energy_weight
+    )
+    return -cost
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    # Lifetime disruption allowance and remaining horizon are not observable.
+    # Avoid spending an unverifiable cumulative budget on repeated evacuations.
+    return out
+# EVOLVE-BLOCK-END

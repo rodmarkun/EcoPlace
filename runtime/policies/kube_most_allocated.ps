@@ -1,0 +1,19 @@
+# Faithful scoring formula for Kubernetes v1.30.14 NodeResourcesFit MostAllocated,
+# restricted to the simulator's CPU+memory observation surface with equal weights.
+POLICY_NAME: str = "most_allocated"
+POLICY_VERSION: str = "1.0.0"
+
+def resource_score(requested: int, capacity: int) -> int:
+    if capacity == 0:
+        return 0
+    used = min(requested, capacity)
+    return (used * 100) // capacity
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    cpu = resource_score(node.cpu_allocated + pod.cpu_request, node.cpu_capacity)
+    mem = resource_score(node.mem_allocated + pod.mem_request, node.mem_capacity)
+    return float((cpu + mem) // 2)
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    return out

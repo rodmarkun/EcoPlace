@@ -1,0 +1,127 @@
+# ruff: noqa: F821
+# graph_headroom — evolution seed for the dev-continuum-* family.  Identity stays
+# outside EVOLVE-BLOCKs; Shinka operators may change only the implementation below.
+#
+# Why this seed and not `least_allocated` (the dev-medium-hot seed): on this family the
+# dependency-blind policies are *infeasible* (worst SLO 0.88 against a 0.90 target), so
+# seeding from one would start every arm outside the feasible region and turn the first
+# half of every campaign into a feasibility hunt rather than a search.  This seed is the
+# most SLO-margined feasible hand-written policy (0.95); it is also the *expensive* one
+# (1.27 normalized energy against `latency_greedy`'s 0.83), which is deliberate — the
+# search starts feasible and has an explicit, large energy gap to close rather than
+# starting at the best baseline with nowhere to go.
+POLICY_NAME: str = "graph_headroom"
+POLICY_VERSION: str = "1.0.0"
+
+# EVOLVE-BLOCK-START
+def proximity_of(mean_latency_ms: float) -> float:
+    scaled = mean_latency_ms / 45.0
+    return 1.0 - min(scaled, 1.0)
+
+def score(pod: Pod, node: NodeState, ctx: ClusterCtx) -> float:
+    if node.suspended:
+        return -1000000.0
+
+    cpu_used = node.cpu_allocated
+    mem_used = node.mem_allocated
+    if pod.current_node != node.id:
+        cpu_used = cpu_used + pod.cpu_request
+        mem_used = mem_used + pod.mem_request
+    cpu_cap = float(max(node.cpu_capacity, 1))
+    mem_cap = float(max(node.mem_capacity, 1))
+    cpu_after = float(cpu_used) / cpu_cap
+    mem_after = float(mem_used) / mem_cap
+    peak = max(cpu_after, mem_after)
+    if peak > 1.0:
+        return -1000000.0
+
+    # Capacity admission is insufficient for offered-request goodput.
+    congestion = peak * peak / max(1.0 - peak, 0.025)
+    cpu_queue = cpu_after * cpu_after / max(1.0 - cpu_after, 0.025)
+    burst = max(peak - 0.55, 0.0)
+    burst_cost = burst * burst * 20.0
+
+    weighted = 0.0
+    weight = 0.0
+    worst_path = 0.0
+    edges = len(ctx.graph.src)
+    for e in range(edges):
+        source = ctx.graph.src[e]
+        destination = ctx.graph.dst[e]
+        other = -1
+        if source == pod.id:
+            other = destination
+        elif destination == pod.id:
+            other = source
+
+        if other >= 0 and other != pod.id and ctx.graph.rate[e] > 0.0:
+            neighbor = ctx.pods[other]
+            endpoint_cost = 180.0
+            if neighbor.current_node >= 0:
+                peer = ctx.nodes[neighbor.current_node]
+                peer_cpu = peer.cpu_allocated
+                peer_mem = peer.mem_allocated
+                if peer.id == node.id:
+                    peer_cpu = cpu_used
+                    peer_mem = mem_used
+                peer_load = max(
+                    float(peer_cpu) / float(max(peer.cpu_capacity, 1)),
+                    float(peer_mem) / float(max(peer.mem_capacity, 1))
+                )
+                peer_queue = peer_load * peer_load / max(1.0 - peer_load, 0.025)
+                latency = node.latency_to_ms[peer.id]
+                if destination == pod.id:
+                    latency = peer.latency_to_ms[node.id]
+                endpoint_cost = latency * (1.0 + 0.25 * peer_queue)
+                endpoint_cost = endpoint_cost + 4.0 * peer_queue
+            else:
+                # Look ahead to feasible dependency placements so early pods
+                # do not receive a free path score for unplaced neighbors.
+                for n in range(len(ctx.nodes)):
+                    peer = ctx.nodes[n]
+                    peer_cpu = peer.cpu_allocated + neighbor.cpu_request
+                    peer_mem = peer.mem_allocated + neighbor.mem_request
+                    if peer.id == node.id:
+                        peer_cpu = cpu_used + neighbor.cpu_request
+                        peer_mem = mem_used + neighbor.mem_request
+                    peer_load = max(
+                        float(peer_cpu) / float(max(peer.cpu_capacity, 1)),
+                        float(peer_mem) / float(max(peer.mem_capacity, 1))
+                    )
+                    if not peer.suspended and peer_load < 0.85:
+                        peer_queue = peer_load * peer_load / max(1.0 - peer_load, 0.025)
+                        latency = node.latency_to_ms[peer.id]
+                        if destination == pod.id:
+                            latency = peer.latency_to_ms[node.id]
+                        prospective = latency * (1.0 + 0.25 * peer_queue)
+                        prospective = prospective + 4.0 * peer_queue
+                        endpoint_cost = min(endpoint_cost, prospective)
+
+            path = endpoint_cost * (1.0 + 0.25 * cpu_queue)
+            rate = ctx.graph.rate[e]
+            weighted = weighted + rate * path
+            weight = weight + rate
+            worst_path = max(worst_path, path)
+
+    mean_path = 0.0
+    if weight > 0.0:
+        mean_path = weighted / weight
+    path_cost = mean_path / 30.0 + worst_path / 60.0
+
+    # Prefer efficient occupied nodes only when queueing and paths allow it.
+    dynamic_power = max(node.power_max_w - node.power_idle_w, 0.0)
+    incremental_power = dynamic_power * float(pod.cpu_request) / cpu_cap
+    if node.cpu_allocated == 0 and node.mem_allocated == 0:
+        incremental_power = incremental_power + node.power_idle_w
+    energy_cost = incremental_power / 120.0
+
+    cost = 0.60 * congestion + 0.25 * cpu_queue + burst_cost
+    cost = cost + 1.20 * path_cost + 0.10 * energy_cost
+    return -cost
+
+def propose_moves(state: ClusterState, graph: CallGraphCtx, budget: int) -> list[Move]:
+    out: list[Move] = []
+    # Cumulative disruption allowances are not exposed here. Avoid repeated
+    # migrations and preserve serving capacity throughout the fixed horizon.
+    return out
+# EVOLVE-BLOCK-END
