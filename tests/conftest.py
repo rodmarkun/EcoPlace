@@ -92,6 +92,35 @@ STALE = {
 }
 
 
+def _killpg_exit_race(exc):
+    """evolution.codex_engine._stop_process_group checks poll() and then calls os.killpg. If
+    the child exits in between, Linux raises ProcessLookupError (handled) but macOS raises
+    PermissionError for an exited, not yet reaped group leader (not handled). The engine is
+    hash-bound to the Study F registration as it ran, so the race is retried here instead."""
+    if not isinstance(exc, PermissionError):
+        return False
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code.co_name == "_stop_process_group":
+            return True
+        tb = tb.tb_next
+    return False
+
+
+def _retry_on_killpg_race(item, attempts=3):
+    run = item.runtest
+
+    def runtest():
+        for attempt in range(attempts):
+            try:
+                return run()
+            except PermissionError as exc:
+                if attempt == attempts - 1 or not _killpg_exit_race(exc):
+                    raise
+
+    item.runtest = runtest
+
+
 def _matches(nodeid, target):
     return nodeid == target or ("[" not in target and nodeid.startswith(target + "["))
 
@@ -105,3 +134,5 @@ def pytest_collection_modifyitems(config, items):
                 break
         if item.nodeid in STALE:
             item.add_marker(pytest.mark.xfail(reason=STALE[item.nodeid], strict=False))
+        if item.nodeid.startswith("tests/test_codex_engine.py::"):
+            _retry_on_killpg_race(item)
