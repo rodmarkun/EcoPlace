@@ -7,6 +7,8 @@ Code, frozen registrations and analysis outputs for the paper
 > Adolfo Lozano-Tello, Javier Berrocal. University of Extremadura. Submitted to *Future
 > Generation Computer Systems*.
 
+Raw run archives: [10.5281/zenodo.23964427](https://doi.org/10.5281/zenodo.23964427).
+
 Placement policies are short programs in a small typed language (PlacementScript) that plug into
 the scoring step of a Kubernetes-style scheduler. An LLM or genetic programming (GP) proposes
 edits to these programs, and a discrete-event simulator of a fog/cloud cluster evaluates them for
@@ -55,10 +57,17 @@ original paths because the registrations record file hashes against those paths.
 The raw outputs of the six studies (per-candidate final-grid records `runs/<root>/final/<sha>.json`,
 paired-run state `pair.json`, campaign manifests and event logs, LLM request/response journals and
 search archives, Study F validation records) total about 26 GB and are not in this repository.
-They are archived on Zenodo, one tarball per study: **DOI to be added**. Extract each archive at
-the root of a checkout to re-run the `analyze.py` scripts or to replay the LLM arms from their
-journals. The same record has `alibaba_call_graph_sample.tar.gz`, the Alibaba-derived call-graph
-sample used by the ingestion tests (see `docs/DATA_LICENSES.md`).
+They are archived on Zenodo, one tarball per study, at [10.5281/zenodo.23964427](https://doi.org/10.5281/zenodo.23964427).
+Extract each archive at the root of a checkout to re-run the `analyze.py` scripts or to replay the
+LLM arms from their journals:
+
+```bash
+for f in /path/to/archives/*.tar.gz; do tar xzf "$f"; done
+```
+
+The Alibaba-derived call-graph sample used by the ingestion tests is a separate record,
+[10.5281/zenodo.23964625](https://doi.org/10.5281/zenodo.23964625), because it keeps the trace maintainers' research-use terms
+(see `docs/DATA_LICENSES.md`).
 
 Approval fields in the registration receipts were edited for publication and the hashes that
 cover them recomputed; see `prereg/README.md`.
@@ -96,7 +105,7 @@ cargo test --manifest-path runtime/Cargo.toml
 ```
 
 Some Python tests need inputs that are not in the repository: the Alibaba call-graph sample
-(`experiments/alibaba_ingestion_20260809/call_graph_sample.json`, from the Zenodo record), the
+(`experiments/alibaba_ingestion_20260809/call_graph_sample.json`, from [10.5281/zenodo.23964625](https://doi.org/10.5281/zenodo.23964625)), the
 checkouts made by `scripts/fetch_data.sh`, and the `rl` extra. `tests/conftest.py` skips those
 tests, naming the missing input, until it is present. It also lists three stale tests of
 development experiments as expected failures. The sealed energy-bundle registration reproduces
@@ -114,7 +123,7 @@ uv run --no-sync python figures/make_topology.py     # scenario topology
 tectonic figures/pipeline.tex                        # process diagram
 ```
 
-**Analyses** (need the Zenodo archive extracted first), for example:
+**Analyses** (need the Zenodo archives extracted first), for example:
 
 ```bash
 uv run --no-sync python experiments/study_f_20261007/analyze.py

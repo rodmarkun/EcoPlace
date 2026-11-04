@@ -26,7 +26,8 @@ def _missing_module(*names):
 SKIP_IF = [
     (
         lambda: not ALIBABA_SAMPLE.exists(),
-        "needs experiments/alibaba_ingestion_20260809/call_graph_sample.json (Zenodo record)",
+        "needs experiments/alibaba_ingestion_20260809/call_graph_sample.json "
+        "(doi:10.5281/zenodo.23964625)",
         [
             "tests/test_alibaba_workload_builder.py::test_builder_emits_dense_multi_template_fan_out_specs_from_selected_fits",
             "tests/test_alibaba_workload_builder.py::test_builder_is_deterministic_for_one_seed_and_seed_sensitive",
