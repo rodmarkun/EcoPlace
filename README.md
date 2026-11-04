@@ -97,8 +97,10 @@ cargo test --manifest-path runtime/Cargo.toml
 
 Some Python tests need inputs that are not in the repository: the Alibaba call-graph sample
 (`experiments/alibaba_ingestion_20260809/call_graph_sample.json`, from the Zenodo record), the
-checkouts made by `scripts/fetch_data.sh`, and the `rl` extra. Without them those tests fail with
-a `FileNotFoundError` or `ImportError` naming what is missing.
+checkouts made by `scripts/fetch_data.sh`, and the `rl` extra. `tests/conftest.py` skips those
+tests, naming the missing input, until it is present. It also lists three stale tests of
+development experiments as expected failures. The sealed energy-bundle registration reproduces
+bit for bit only on macOS arm64, where the studies ran, so CI runs the Python suite there.
 
 ## Reproducing
 

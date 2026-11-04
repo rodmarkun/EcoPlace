@@ -27,8 +27,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust (stable, wasm32-wasip1)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (1.93.0, the toolchain the studies used; wasm32-wasip1)
+        uses: dtolnay/rust-toolchain@1.93.0
         with:
           components: rustfmt, clippy
           # wasm32-wasi was renamed upstream; wasip1 is the same WASI preview-1 target.
@@ -47,7 +47,7 @@ jobs:
       - name: wasm32-wasip1 build (interpreter + guest module; py/host crates are native-only)
         run: cargo build -p placementscript-core -p placementscript-wasm-guest --target wasm32-wasip1
 
-      - name: tests (workspace; wasm-consuming tests pinned to the guest built above — R1.8)
+      - name: tests (workspace; wasm-consuming tests pinned to the guest built above)
         env:
           PS_WASM_GUEST: ${{ github.workspace }}/runtime/target/wasm32-wasip1/debug/placementscript_wasm_guest.wasm
         run: cargo test --workspace
