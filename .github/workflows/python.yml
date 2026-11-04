@@ -57,6 +57,14 @@ jobs:
         # registrations and are not reformatted.
         run: uv run --no-sync ruff check sim evolution baselines analysis runtime tests scripts figures
 
+      - name: Fetch the Alibaba call-graph sample (doi:10.5281/zenodo.23964625)
+        working-directory: EvolvedContinuum
+        run: |
+          curl -sSfL --retry 3 -o /tmp/alibaba_sample.tar.gz \
+            "https://zenodo.org/records/23964625/files/alibaba_call_graph_sample.tar.gz?download=1"
+          test "$(shasum -a 256 /tmp/alibaba_sample.tar.gz | cut -d' ' -f1)" = "444bf847398a74851af026620a054615dd1c63a128cabc322130971383b97519"
+          tar xzf /tmp/alibaba_sample.tar.gz
+
       - name: pytest
         working-directory: EvolvedContinuum
         run: uv run --no-sync pytest
