@@ -7,6 +7,10 @@ Code, frozen registrations and analysis outputs for the paper
 > Adolfo Lozano-Tello, Javier Berrocal. University of Extremadura. Submitted to *Future
 > Generation Computer Systems*.
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23974858.svg)](https://doi.org/10.5281/zenodo.23974858)
+
+Archived code (v1.0.0, the version the paper used):
+[10.5281/zenodo.23974858](https://doi.org/10.5281/zenodo.23974858).
 Raw run archives: [10.5281/zenodo.23964427](https://doi.org/10.5281/zenodo.23964427).
 
 Placement policies are short programs in a small typed language (PlacementScript) that plug into
