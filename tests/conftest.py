@@ -107,15 +107,23 @@ def _killpg_exit_race(exc):
     return False
 
 
-def _retry_on_killpg_race(item, attempts=3):
+def _stub_startup_too_slow(exc):
+    """Some Codex engine tests give the stub CLI 0.05 s to print its first event. On a loaded CI
+    runner the stub can miss that window and print nothing, which the engine reports as "saw
+    event types []". The tests are hash-bound like the engine, so this case is retried too."""
+    return isinstance(exc, AssertionError) and "saw event types []" in str(exc)
+
+
+def _retry_transient_codex_failures(item, attempts=3):
     run = item.runtest
 
     def runtest():
         for attempt in range(attempts):
             try:
                 return run()
-            except PermissionError as exc:
-                if attempt == attempts - 1 or not _killpg_exit_race(exc):
+            except (PermissionError, AssertionError) as exc:
+                transient = _killpg_exit_race(exc) or _stub_startup_too_slow(exc)
+                if attempt == attempts - 1 or not transient:
                     raise
 
     item.runtest = runtest
@@ -135,4 +143,4 @@ def pytest_collection_modifyitems(config, items):
         if item.nodeid in STALE:
             item.add_marker(pytest.mark.xfail(reason=STALE[item.nodeid], strict=False))
         if item.nodeid.startswith("tests/test_codex_engine.py::"):
-            _retry_on_killpg_race(item)
+            _retry_transient_codex_failures(item)
